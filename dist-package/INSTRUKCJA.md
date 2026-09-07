@@ -1,4 +1,11 @@
-# SandTogether — coop mod dla Sandustry (v0.9.39-beta)
+> ### ⚠ Nieoficjalny fork — zaktualizowany pod Sandustry 0.5.6
+>
+> To jest **nieoficjalny fork** moda SandTogether autorstwa Kamila Paduli, zaktualizowany
+> pod wersję gry **0.5.6**. Cała zasługa za mod należy do oryginalnego autora, licencja
+> MIT bez zmian. **Obaj gracze muszą mieć tę samą wersję** — połączenie z wersją
+> z Warsztatu pokaże ostrzeżenie MOD VERSION MISMATCH.
+>
+> Szczegóły zmian: `README.md` (EN) · Fork: https://github.com/Qustux/sandtogether
 
 **Autor: Kamil Padula** · Współtwórcy: **dotNine**, **Knight-HD**, **DwoaC**, **Cr0ss0vr**
 
