@@ -1,22 +1,17 @@
-# Changelog
-
 ## 0.9.165-beta (unofficial fork)
-
+ 
 Compatibility with Sandustry **0.5.6**, a set of sync fixes, and two new features: a full action
 preview and name labels for held items.
 All changes are in `src/sandtogether.js` and `src/patches.json`; installers and `st-main.js` are untouched.
-
----
-
+ 
 ### Sandustry 0.5.6 compatibility
-
+ 
 The 0.5.6 bundle is structurally identical to 0.5.5 but was re-minified, so most literal anchors
 stopped matching: **21 of 29 hooks missed**. None of them is marked `critical`, so the installer did
 not fail — it printed the "many tools will NOT sync" warning and co-op ran half-broken.
-
+ 
 * `supportedVersions` now includes `0.5.6`.
 * 21 hooks got a new leading variant; hook count 29 → 32 (three new hooks, see below).
-
 **How the anchors were regenerated** (reproducible next time the game is re-minified):
 each old anchor was turned into a regex where every identifier of length ≤ 2 that is *not* preceded
 by a dot (i.e. minified locals and webpack module aliases) became a capture group with
@@ -24,70 +19,66 @@ backreferences for repeats, while property names, string literals and longer ide
 literal. Matching that against the clean `dist/js/bundle.js` extracted from `app.asar` produced
 **exactly one** hit for all 21, and the resulting old→new name mapping was applied to each `patched`
 string.
-
+ 
 Two anchors needed manual correction because their `patched` text references identifiers that do not
 appear in the anchor:
-
+ 
 * **demolish module exports** — in module `40443` the pipe-demolish alias is `m` in 0.5.6
   (`m=n(34142)`, called as `(0,m.Zn)(e,t,n)`), not `p`.
 * **entities single-init export** — 0.5.6 renamed `dp`→`op`, `Rp`→`Np`, `Np`→`Dp`, `Ip`→`Lp` and
   added `Fp(t)` (pet-timer normalisation) to the init sequence.
-
 ### New hooks
-
+ 
 | Hook | Purpose |
 | --- | --- |
 | `undo module export (_undoState)` | exports the undo module state so remote changes can be kept out of the local Ctrl+Z history |
 | `build preview export (_bpPos/_drawStruct)` | exports the game's own build-preview positions and its structure draw function |
 | `build preview export - single place (_bpPos/_drawStruct)` | same, for the single-placement branch |
-
----
-
+ 
 ### World transfer restart loop
-
+ 
 Joining could hang for minutes: in one log the save transfer restarted **41 times over 2 m 43 s** and
 the client never received a complete world, so it played on a stale copy — items would not place,
 digging was invisible to its owner.
-
+ 
 Cause: `scheduleRxCheck` sent `world-need` every 700 ms regardless of progress, so during a normal
 transfer the host received a stream of them. On a stale `tid` the host did `ST._wtx = null;
 sendWorld()`, and `sendWorld` is async (`FH.game.save` plus up to 10 s waiting for the file to
 appear); for ~3 s it therefore sent nothing at all while the client kept asking with the old `tid`.
 The first of those requests to arrive after the new `_wtx` was set restarted everything again.
-
+ 
 Fixes:
-
+ 
 * stale `tid` now re-announces `world-begin` for the **current** transfer and re-queues its parts —
   the chunks are still in `ST._wtx.parts`, no re-export is needed;
 * `ST._wtxPreparing` guard around the async preparation, checked **outside** the `try/finally` so a
   rejected call cannot clear the flag of the running one;
 * `world-need` is sent only when the transfer has actually stalled (no new part since the last check,
   or `world-end` already seen).
-
 ### Mirror pacing
-
+ 
 `w.lag` is measured in batches and its thresholds (`>5`, `>8`, `>25`) were calibrated for a fixed
 10 batches/s, but the cadence is adaptive and goes down to 16 ms (~60/s). At that rate the ack
 granularity alone (client acks 10×/s) plus RTT is worth ~14 batches on a perfectly healthy link, so
 the host classified it as congestion, dropped to 10 Hz, recovered, and oscillated — visible in the
 log as alternating `63Hz` and `10Hz`, and to the client as stuttering sand and conveyors.
-
+ 
 Lag is now expressed in milliseconds with the known overhead removed:
-
+ 
 ```js
 w.lagMs = Math.max(0, w.lag * (w.gap || 33) - 100 - pingMs);
 ```
-
+ 
 Thresholds are time-based (cadence 300/150 ms, byte budget 700/350 ms, hard stop 2500 ms), and
 `SYNC-HOST` prints `lag N/Nms` so the effect is visible in logs.
-
+ 
 ### Per-player undo (Ctrl+Z)
-
+ 
 The game's undo history is filled by `structures:removed` / `moved` / `pasted` and
 `afterStructuresPlaced`. The mod applies remote changes through the same functions, so those events
 fired locally too and each player's history ended up holding the **other** player's actions — Ctrl+Z
 undid someone else's work.
-
+ 
 * `_applyingNet` now mirrors into the undo module's `isUndoing`, which the game already uses to skip
   history writes; the previous value is restored rather than forced to `false`, so the game's own
   undo flag survives.
@@ -103,17 +94,16 @@ undid someone else's work.
   mirror skipped them and the client kept the stale (red) tiles.
 * A client-side check reports foundation tiles that have no structure to the host, which answers with
   either the missing structures or permission to clean the tile.
-
 ### New feature: action preview
-
+ 
 Previously there was no working action preview. `getBuildIntent` existed, but it fell back to the
 hotbar slot and read `item.type`, which is the **category** enum (`X2`: Weapon / Building / Tool /
 Mod), not a structure id. The result was one small square, identical for every action and every
 structure, so a remote player looked exactly the same whether they were building, digging or
 grabbing. The preview logic in this fork is essentially new code.
-
+ 
 It now mirrors what the acting player sees:
-
+ 
 * **Building** — exact positions and the structure's own graphics are taken from the game's build
   preview loop through two new hooks, so build mode (single / line / rectangle), snap grid, angled
   lines and left/right variants are all correct. A direction arrow is drawn for directional
@@ -123,33 +113,30 @@ It now mirrors what the acting player sees:
 * **Grabber** — tool footprint from the game's own formula (`Math.sqrt(tool.data.size)`), and the
   tank contents drawn in real element colours from
   `session.colors.scheme.element[type].variants[0]`, in the same layout the carrier sees.
-
 Selection comes from `FH.action.getSelected` instead of being guessed from the hotbar, which is what
 makes the above possible at all.
-
+ 
 ### New feature: name labels above held items
-
+ 
 The structure or material in a player's hands is now labelled above the preview — "Gold ×14",
 "Sediment", "Collector". This applies to other players and to yourself, so you can tell at a glance
 what everyone is holding and what you just picked up. Labels are resolved through
 `FH.i18n.t(cfg.nameKey)` so they follow the game language, and variant ids (e.g. a mirrored
 conveyor) are mapped back to their base config, which is where `nameKey` lives.
-
+ 
 **A game-side gotcha worth calling out:** `FH.rendering.getDrawPos` returns a shared mutable object
 (`ke=(e,t,n)=>(we.x=…,we.y=…,we)`), so two calls yield the same object and comparing them to derive
 pixels-per-cell always gives `0`. That silently fed a hardcoded fallback of `6` instead of the real
 `4`, and every overlay came out ~1.5× too large. Results are copied immediately now and the scale is
 taken as `cellSize * session.view.zoom`.
-
+ 
 Also fixed: the overlay canvas was sized to the game canvas backing store and stretched, which looked
 blurry on HiDPI; a departed player's nametag stayed on screen forever because the canvas was only
 cleared when at least one peer was left; peers that vanish without a clean disconnect are dropped
 after 45 s of silence.
-
----
-
+ 
 ### Known issues
-
+ 
 * Undoing a **very large** demolish can leave red, unregistered tiles on the client for 10+ seconds
   before they resolve. Small and medium areas recover in about a second. The cause is understood well
   enough to keep working on, but verifying a fix needs two players at once and my co-tester is away,
@@ -158,5 +145,1153 @@ after 45 s of silence.
 
 ---
 
-Original mod by **Kamil Padula** — <https://github.com/IronBamBam1990/sandtogether> (MIT).
-This fork keeps the same licence.
+## 0.9.164-beta
+
+**Grabber could hand the client material that never left the world (report: Maelle).** The host-side
+harvest removed the element and immediately sent its type to the client tank, without checking that the
+removal actually took effect - vanilla, by contrast, skips cells already claimed, removes through the
+verified mutation queue and ROLLS BACK the tank slot when the cell no longer holds that type. The host
+now confirms the element is really gone before crediting it to the client, and blocks a cell whose
+removal failed for 400 ms. Measured: the normal grab path is untouched (removeAt is synchronous on the
+host, including for particles - zero rejections in testing).
+
+**Recall Shard (client says "gloom missing") could not be reproduced.** Verified live on a host+client
+pair: the "building:placed" event does fire on the client (so the portal position the item reads is set
+correctly), the structure and its queued flag mirror, and Gloom element types match the host exactly
+(192 cells host = 192 client, moving included) - running the game own check on both sides agreed.
+The game requires ALL 16 cells (4x4) directly above the portal base to be gloom, so a single different
+cell produces that message. Chasing this further needs a log or save from an affected world.
+
+## 0.9.163-beta (content update: installer messages in English + macOS recovery hints)
+
+**The macOS/Linux installer spoke Polish.** `patch.js` (used by `install.command` and
+`install-linux.sh`) printed every message — including its fatal errors — in Polish, so a player
+hitting a failure could not read what went wrong (report: thatsmaik, on behalf of a friend whose
+macOS install stayed on 0.9.162). All patcher output is English now. The root cause of that
+friend's failure was the alias-detection bug fixed in 0.9.163: on an ALREADY-patched 0.5.5 bundle
+the old detector found no alias, so the critical frame hook looked unmatched and the patcher aborted
+with "unsupported game build" — verified by replaying the old detector against a patched bundle.
+The patcher also warns when >8 hooks miss (game newer than mod), and `install.js` now prints a
+recovery path on failure (update via Steam, then verify-integrity + delete the unpacked app folder).
+
+## 0.9.163-beta (content update: Linux installer fix)
+
+**Linux installer picked the wrong file as the game binary** (fix contributed by **UwUDev**, PR #19).
+`find_bin()` took the first executable file in the game folder, so on setups where
+`LICENSE.electron.txt` carries the executable bit the installer tried to *run the license file*:
+`syntax error near unexpected token 'c'`. It now requires ELF magic bytes (`\177ELF`) instead of
+trusting the executable bit, with a widened extension blacklist as a first pass.
+
+**Full support for game build 0.5.5 (anchor-porting round).** The 0.5.5 game update shipped genuinely
+new code — a new dig/pattern system (`DN` now takes pattern/power/options/terrainRules), renamed
+internals, a re-minified bundle (FH alias `se`) — and 25 of 29 patch anchors stopped matching. The
+mod half-installed: co-op connected and the world mirrored (the critical frame hook still applied via
+alias adaptation), but client actions were dead — shovel didn't dig, client buildings invisible to
+the host, sand fell through client shakers, volcanizer/grabber-shake/cryo/flamethrower/vacuum/
+demolisher/caulk/corraller didn't sync (reports: The_Dark_LP, DW|Joergschen). All 25 anchors were
+re-derived against the vanilla 0.5.5 bundle (each verified unique before install) and confirmed
+live: client dig replay, shake residue+process counter, volcanizer lava with velocity all land on
+the host again. Also:
+
+- `patch.js`/`install.ps1`: FH-alias detection now works on already-patched bundles too (the vanilla
+  `emit(e,"frame:update"` form disappears after patching; a re-run wrongly reported "NOT supported").
+- Installer: when many hooks miss (>8) it prints a red warning that the game build is ahead of the
+  mod, instead of the soft "co-op will work" note that misled players this round.
+
+## 0.9.162-beta
+
+**The re-minified-build fix (0.9.160) now covers the public installer too.** The alias adaptation
+shipped in 0.9.160 lived only in the dev patcher (`src/patch.js`); the installer players actually
+run (`install.bat` -> `install.ps1`) still tried every anchor literally, so a re-minified bundle
+(FH module aliased e.g. `se` instead of `ie` - cayden.sieteski's case) kept failing with a false
+"This game version is NOT supported". The PowerShell installer now detects the FH alias from the
+bundle itself (regex on the `frame:update` emit) and, when a literal anchor misses, retries it with
+`ie.FH` rewritten to the detected alias. The critical-failure message also names the detected alias
+now, which makes future "NOT supported" reports diagnosable at a glance. Verified on a simulated
+re-minified bundle (all 29 hooks apply, zero critical misses); PowerShell 5.1 syntax parser-checked.
+Mod runtime is unchanged from 0.9.161.
+
+## 0.9.161-beta
+
+**Full line-by-line audit of the mod (5455+740+196 lines) against the official Sandkit docs** - five
+real defects found and fixed:
+
+- **The frame hook wears armor now.** Our per-frame code runs inside the game's frame:update emit;
+  an uncaught exception there propagates into the game's promise-chained frame loop and kills it
+  PERMANENTLY - static screen while the mirror keeps applying in the background (observed live:
+  frame:update dead for 130+ s). Every error is now caught, logged with a stack (first 10) and
+  swallowed. A renderer-wide error/rejection recorder also writes uncaught errors to the log and
+  keeps the last rejection in memory - the next freeze anyone hits will name its culprit in seconds
+  (it already convicted one: a malformed test item injected during our own session, not mod code).
+- **Joining clients get the host's teleport zones and unlocked-item list.** Both were sent only on
+  change, and the one send after world load raced the client's mirror start and was dropped - a
+  fresh client kept its locally generated zones forever (measured: 360 zones vs the host's 351).
+  Signatures now reset on peer join and the zones re-send every 30 s; verified converged 351=351.
+- **A mangled IP regex** (invisible backspace characters where \b should be - a heredoc scar) made
+  the "use the host's local address" hint dead code since 0.9.133. Restored.
+- **A session-reset statement swallowed by a comment** (glued onto its tail) left stale
+  unacknowledged-batch records across host sessions; after 20 s they counted as "lost" and dirtied
+  the fresh session's queue. Restored.
+- **Shake residue now goes through the when-idle queue** like lava/ice - a bare mid-frame createAt
+  could lose the race against the simulation worker (the exact bug class fixed for cryo in 0.9.150).
+
+## 0.9.160-beta
+
+**The installer survives Steam's re-minified builds (report: cayden.sieteski).** Steam can serve
+differently-minified bundles under the same game version number - the reporter's 0.5.5 build had the
+FH module aliased as `se` where ours says `ie`, so every literal patch anchor missed and the
+installer aborted with a misleading "version not supported" error even though the build was fine.
+The patcher now detects the FH alias straight from the bundle (via the frame:update emit signature)
+and, when a literal anchor misses, retries it with the alias rewritten. Verified on a simulated
+re-minified bundle: all hooks apply, including the critical frame hook. On builds where deeper
+minified names also changed, non-critical hooks may still skip with a warning (the mod boots and the
+core sync works) - send us your unpatched bundle.js and we'll port the rest properly.
+
+## 0.9.159-beta
+
+**The Corraller finally works the same on the client as on the host.** A long chain of client-side
+defects fell in one sustained session with the author testing live:
+
+- **Critter duplication is gone.** Every capture was counted twice: the client's local capture tick
+  finalized the catch (bucket +1) and forwarded a legacy "collect" to the host, which counted it
+  again next to its own authoritative finalize from the forwarded capture. The client no longer
+  finalizes captures at all (host-only; a bundle gate skips the local finalize), and the host ignores
+  collects for critters being corralled. Conservation verified live: map + bucket stays constant to
+  the single critter across mass release/capture cycles.
+- **The screen no longer brightens permanently.** Critter lights are eternal (durationMs -1) and are
+  keyed to the critter OBJECT; the entity sync replaced objects wholesale every ~5 s, orphaning the
+  real light and letting removal extinguish someone else's index. Entity sync now preserves object
+  identity (fields merged in place, host light indexes stripped). Measured: 8 released shinelets peak
+  ~92 active lights (their natural glow), back to exactly 0 after recapture, both sides.
+- **Releases show the muzzle launch.** The real critter used to appear only after the host round
+  trip (~200 ms), so the client saw no launch animation. The client now spawns an instant visual
+  echo with full local physics (flies, bounces off walls) and hands over to the host-authoritative
+  critter within 600 ms.
+- **Flying critters bounce on the client.** Host velocities ride the 10 Hz entity lane and in-flight
+  critters are integrated by local physics (position corrected only on >48 px drift), so arcs and
+  wall bounces render exactly like the host's.
+- **Capture completion has effects on the client** - collect sound, flash and particles (previously
+  critters silently vanished).
+- **The bucket counter updates live** - counters are merged in place and the hotbar overlay is
+  refreshed through the same overlays.update("hotbar") call vanilla uses. Verified on screen:
+  the displayed count tracked host-side changes 1:1 in the author's window.
+- **No more stuck critter sprites.** A janitor sweeps the entity sprite registry every entity packet
+  and destroys any sprite whose critter is gone (en/st race could orphan one).
+- **entCap flood fixed.** The capture cone skips critters already being captured (the capturing flag
+  is honored again) plus a 1 s per-id resend guard - one capture request per critter instead of 60/s.
+
+**Filters no longer reset for the host (report: MaxMasterB).** The client's machine-config scan
+attached its possibly stale filter to every data change, silently reverting the host's newer filter
+config; the filter now rides along only when the filter itself changed.
+
+**Structure-specific filters survive client placement (report: darkalien - "planter boxes block
+gold").** Every client placement carried the placer's global default filter and the host applied it
+to everything - including the Planter Box, whose game-assigned pass filter (gold/seeds) got replaced
+by the generic sand+water default. The override now applies only when the built filter derives from
+the host's default filter; structure-specific filters are preserved.
+
+**Upgrade orb no longer locks the other player (report: MaxMasterB).** pendingChoice/viewMode are
+per-player UI flags living in the shared augments object: the host stream kept re-arming the input
+lock on the player who had already closed the popup, and the first player's choice could wipe the
+other's open popup and freshly picked nodes. The client now accepts pendingChoice only on a
+false-to-true edge (a new orb), and the host merges choices (nodes united, levels maxed) instead of
+assigning the whole object.
+
+**Story steps unlock live for the client (report: darkalien - teleporter/anomaly needed a restart).**
+Story progression arrived silently in the state stream, so the client never ran step handlers
+(rewards, teleport waypoints like the anomaly's Void destination). New steps from the team are now
+emitted locally as story:stepCompleted, mirroring what the tech sync has done since 0.9.89.
+
+Also shipped (0.9.158 work): volcanizer, caulk blaster and flamethrower create elements through the
+when-idle queue with proper velocity/duration like vanilla, and the apply pump acknowledges from both
+the frame hook and the drain pump.
+
+## 0.9.157-beta
+
+**Hotfix for 0.9.156: the full-tank blow-away could delete material.** The blow step removed the
+element through the deferred (when-idle-preferring) removal alias, so inside the idle callback the
+removal was queued for later while the velocity re-create ran immediately against a still-occupied
+cell and silently failed - the late removal then erased the element. Exactly the "everything vanishes
+into the ether" the author hit within minutes of hands-on testing on a level-6 world. Removal and
+re-create are now synchronous within the single when-idle callback (cell freed, create succeeds).
+Verified with an honest measurement this time - a fixed wide region counted before and after, with
+type conversions included (sand landing in water becomes wet sand): 20 cells before, 22 sand + 6 wet
+sand after across the settle radius - zero net loss. Also recorded: the flawed measurement that let
+the 0.9.156 bug through used different scan regions before and after; the test recipe now mandates a
+fixed region plus conversion counting.
+
+## 0.9.156-beta
+
+**The background-window freeze is gone.** The client's apply pump was scheduled exclusively with
+requestAnimationFrame, which Chromium throttles for occluded windows (even with the anti-throttling
+flags) - a client window behind another window stopped applying world packets, the host detected the
+stall and paused sending, and the whole session read as frozen. Caught live three times by the new
+log monitor, including during the author's own play session. The pump now schedules both a frame
+callback and a 150 ms watchdog timeout - whichever fires first runs the drain and cancels the other.
+Background timers are throttled to ~1 Hz, which is ample for the 10 ms drain budget; a visible window
+still runs at full frame rate. Verified e2e: two minutes of continuous world churn with the client
+window fully covered - applyCount 104 -> 1453, zero congestion stalls (previously stalled within 30 s).
+
+**Full tanks blow particles away, like vanilla.** With no room in the tanks the host used to leave
+sucked material in place silently - to the player the vacuum "did nothing". The game has always
+passed the mod a blow vector (fourth argument of the intake hook - ignored until now); it now rides
+in the intake request and the host re-creates non-fitting elements with that velocity through the
+when-idle queue, so they visibly fly away from the nozzle. Nothing is deleted: verified e2e with
+three full tanks - world sand count unchanged after suction, tanks untouched.
+
+## 0.9.155-beta
+
+**Host frame spikes: 80 ms -> 34 ms (profiler-guided).** The per-subsystem frame profiler
+added in 0.9.154 named two culprits on a big factory with players inside it. The mirror batch builder
+had a byte budget but no time budget: hashing hundreds of constantly-dirty belt chunks produces zero
+output bytes when rows are unchanged, so the byte valve never fired and single frames burned up to
+80 ms in row hashing - the loop now hard-stops after 10 ms and returns the remainder to the queue
+(the existing stoppedAt mechanism). And the resources sync serialized and IPC-cloned the entire
+upgrades tree, tech flags, progression, story state and building list every second, changed or not -
+those heavy sections now ship every 5 s and only when their JSON actually differs (cached compare;
+the scalar lane - resources, gold, energy, belt animation, factory process counters - stays at 1 s,
+and a newly joined peer forces a fresh heavy send). Client-side handlers already guard every field,
+so omitted sections are backward-safe.
+
+## 0.9.154-beta
+
+**Sliced structure snapshots - the ~140 ms hitch is gone.** Whenever the set of structures changed
+(anyone building or demolishing), the host serialized the whole structure list in a single frame and
+the client parsed and applied it in a single frame - measured at ~140 ms on an 84,228-structure world,
+recurring every 2.5 s during active building. The snapshot now travels as parts of 4,000 structures:
+the host serializes exactly one part per frame (the view may tear across parts - harmless, since ghost
+reconciliation requires three consecutive absences plus a 30 s fresh-build shield), parts arrive and
+apply independently in any order, and the ghost reconcile walks the local list with a 4 ms per-frame
+cursor once all parts of a snapshot landed (0.9.150/153 caps kept: max 50 removals, full stop above a
+2,000-structure divergence). Measured after: worst client hitch 19 ms, average 10 ms per part.
+
+**Permanent frame profiler.** A MOD-FRAME log line (at most one per 10 s, only when frames exceeded
+25 ms) reports the spike count, the host sync block's worst cost, snapshot serialization time and the
+client's snapshot apply time - so "it stutters" reports now arrive with the culprit named. First
+finding already on record: the host sync block peaked at 43 ms on the big world - that is the next
+target.
+
+## 0.9.153-beta
+
+**Big-factory mirror bandwidth cut ~10x (Sessional).** Items moving on conveyors dirty their
+cells every tick, so a belt-heavy chunk re-entered the send queue ~10x/s forever - pure cosmetic
+churn no player was looking at. Measured on an 84,228-structure factory world with both players away
+from the base: 5136 KB/s and 1249 chunks/s of mirror traffic. Distant chunks now carry a per-chunk
+cooldown of 600 ms (~1.6 refreshes/s); chunks within ~2 screens of any player keep the full rate, and
+a one-off distant change (a placed building, a dug tunnel) still ships immediately - its chunk has no
+recent send to wait out. Same scenario after: 523 KB/s, 88 chunks/s. Near-player traffic verified
+unthrottled (1098 chunks/s with both players inside the belt city). Nothing is skipped, only
+rescheduled - the chunk stays queued until its clock allows it. Pattern borrowed from Factorio's
+FFF#421 optimization notes: lower the update rate where nobody is watching.
+
+## 0.9.152-beta
+
+**The frozen-world-on-join case that survived 0.9.150 (Quadbro).** The joining player saw a static
+world while the host received their every action. Loading the transferred world reloads the joining
+player's game, which wipes the mod's in-memory trust state - and importing a world the player already
+had a copy of assigns it a NEW local world id, so every mirror packet failed the world-id check forever
+after; the one-shot rescue reload imported yet another new id and hit the same wall. The 0.9.150 world
+session token (which survives the reload) now rides in every mirror packet: a client that loaded exactly
+the host's transfer is trusted regardless of local world ids. The host also stops re-sending the world
+on every handshake when the token already matches - a new local id after import is normal, not a reason
+to transfer again. Verified by forcing a foreign world id and a wiped trust state on a live client: the
+mirror kept applying.
+
+## 0.9.151-beta
+
+**Client-placed filters now behave like what they display (darkalien, GitHub issue #18).** Two stacked
+bugs on top of the 0.9.146/147 fix. The override gate keyed on the structure config's tooltip marker,
+which is not reliable across the numeric vanilla types - so ordinary placements could skip the override
+entirely and only copy-paste ever carried the client's config. And even when the override applied, it
+patched only the store copy: the simulation workers - where filtering actually happens - kept the filter
+the game had stamped at build time from the host's own selection. Hence the reported symptom: the filter
+shows the client's config on both screens but behaves like whatever the host last placed. The override
+now applies to every filter-bearing structure except the fixed-filter ones (gloom emitter and critter
+fence, recognized by config name and by the density key only their filters carry), and after the
+override the structure is re-propagated to the simulation workers exactly like the edit path has done
+since 0.9.142. Verified on two instances: host config residue, client placed a gold filter - the built
+structure carries gold on the host, in the mirror, and in the workers.
+
+## 0.9.150-beta
+
+**The joining player always gets the world the host is actually playing.** Two root causes fixed. First,
+the world transfer exported the *newest save file on disk*, not the world the host had loaded - a host on
+an older save (or a different world) sent something else entirely. The host now saves its live world to a
+temporary file and sends exactly that, falling back to the newest save of the current world's id, and
+cleans the temporary file up afterwards. Second, the join handshake compared only the world id, so a
+returning player with a *stale copy of the same world* was waved through with no save at all - the mirror
+and the ghost-reconciler then spent hours stitching two different states together (one captured client log
+held 11,055 ghost-removal lines, freezing the game). Every state capture now mints a session token that
+travels with the world transfer and comes back in the handshake; a client whose token does not match gets
+the save, and a transfer carrying a new token is allowed to reload the client even while the mirror is
+running (capped at two such reloads per session). Verified machine-to-machine: a client holding a
+three-day-newer copy of the same world converged to the host's exact structure count within seconds.
+
+**Reconcile hardened.** Ghost removals are capped at 50 per snapshot with one summary log line, and when
+more than 2000 local structures are unknown to the host it stops deleting entirely - that is not ghosts,
+that is a different world state, and the new transfer logic delivers the right save instead.
+
+**The joining player's cryo gun makes snow again (Moonbugy).** Pellets were recreated on the host with a
+bare mid-frame write and no velocity, racing the simulation workers - they vanished shortly after landing.
+They now carry the client-computed velocity and go through the game's own when-idle mutation queue, the
+same path vanilla uses. Verified: 22/24 pellets persisted and mirrored.
+
+**Emptying the vacuum tank works for the joining player (Maelle).** Vanilla decrements the tank before a
+deferred queue creates the elements - and that queue is deliberately disabled on the joining side, so the
+tank drained into nothing. The release is now computed on the client (vanilla spread, angle and speed),
+replayed by the host through the when-idle queue, and anything the host refuses comes back to the tank.
+
+## 0.9.149-beta
+
+**The joining player's vacuum now mirrors the base game's logic exactly.** 0.9.148 fixed the crash that
+deleted everything, but the order of operations was still backwards: the host removed up to ten elements
+and sent the types over, and the joining player's side silently discarded whatever did not fit into the
+tanks - so with full tanks, material still vanished from the world. The vacuum act now carries the tank
+state (types, amounts, capacity, active-tank setting), and the host finds a tank slot *before* removing
+anything, simulating the fill within the batch the same way the game's own slot function does. What does
+not fit stays in the world, and the client shows the vanilla "tanks full" toast. The host also applies
+the game's intake rules that were missing from the reimplementation: liquids, gases and static materials
+are never vacuumed, materials flagged non-transportable are skipped, and zone authorization is checked
+per cell.
+
+## 0.9.148-beta
+
+**The joining player's vacuum deleted everything it sucked up (Maelle).** A refactor in 0.9.141 renamed
+the collected-type variable in both grabber paths and, by global replace, in the vacuum handler too - but
+the vacuum handler never got the line that defines it. The host removed the element from the world, then
+hit a ReferenceError swallowed by an empty catch: the material was gone, the collected-types list stayed
+empty, the response packet was never sent, and the client's tank stayed empty. The skipped counter also
+disabled the 10-elements-per-tick intake limit, so a single pass could swallow the entire intake circle.
+The handler now resolves the grabbed type the same way the grabber does (merged particles resolve to their
+real material) and compares the vacuum's filter against that resolved type.
+
+## 0.9.147-beta
+
+**Amends 0.9.146.** That fix applied the joining player's filter config to every freshly built structure
+with a filter - but the gloom emitter and the critter fence carry *fixed* filters the game assigns on its
+own (the emitter's sets its density), and a player config stamped over them breaks their mechanics. The
+override now applies only to structures the game itself marks filter-configurable (`tooltipHover.type ===
+"filter"`, minus the critter fence), and a copy-paste travels under its own flag: the pasted filter is
+assigned verbatim to the same structure type, which also covers machines that only ever get a filter
+through copying. Game-forced liquid/gas flags survive the merge, since the player's filter config does not
+carry those keys at all.
+
+## 0.9.146-beta
+
+**Filters placed by a joining player kept coming out with the host's config (Maelle, Moonbugy).** The game
+assigns a freshly placed filter its configuration inside the *building:placed* handler, reading
+`store.options.defaultFilter` - the filter-config UI state of *whoever is placing*. In a session the host
+places everything on the joining player's behalf, so that handler ran on the host and stamped in the host's
+current selection, regardless of what the client had configured. Copy-paste lost the filter the same way:
+the game copies it from the copying player's session, which the host does not have. The placement act now
+carries the placing player's filter (from the copied structure if pasting, otherwise from their own filter
+config), and the host overwrites the freshly built structure's filter with it before mirroring it out.
+Only filter-bearing structures are touched - the game marks those itself - and pass-through pieces keep
+the affectsLiquid/affectsGas flags the game forces on them. Editing an already placed filter has worked
+since 0.9.142; this closes the placement half of the report.
+
+## 0.9.145-beta
+
+**Rubber-band lag over the internet - our bug, not your connection.** The TCP sockets carrying a direct or
+LAN session were left with Nagle's algorithm enabled, which Node does by default. Nagle holds a small write
+until the previous small segment is acknowledged, so only one may be in flight at a time. Every message goes
+out as its own write and player positions are sent 30 times a second, which means an 80 ms link passed
+roughly twelve of them per second and delivered the rest in bursts - while digging, grabbing and placing
+queued in the same stream behind them. On a LAN the round trip is under a millisecond and none of this shows,
+which is why it survived this long; over the internet it produced exactly the symptoms players described:
+good ping, good bandwidth, strong host, and a session that still felt like rubber, with a teammate unable to
+pick anything up. Both ends now set TCP_NODELAY. (Reported by friberg, whose 80 ms ping on a 600/300 line
+ruled the connection out; the same complaint had come from others who had already tried Steam, Hamachi and
+direct hosting and found all three equally bad - which fits, since the fault was below all of them.)
+
+## 0.9.144-beta
+
+**The Steam relay now announces itself.** A session invited through Steam runs over Valve's relay, which
+throttles bandwidth and can push the round trip to hundreds of seconds; the world transfer then crawls and
+player actions queue behind it, so the game looks frozen rather than slow. Once the measured round trip
+passes 5 s the panel says so in red and names the way out: the host restarts as *Host (Internet — direct)*
+and the other player joins by address. (Reported by Sessional, whose session showed 449 s round trip and
+6318 chunks still to send.)
+
+**"It keeps switching me to LAN" — it never did.** The joining side labelled every join-by-address session
+LAN, including connections across the internet, because the direct-mode flag was only ever set on the host.
+The label is now derived from the address actually connected to: public address → Internet, private or VPN
+address (RFC1918, loopback, link-local, CGNAT/Tailscale, Hamachi, Radmin) → LAN. Nothing about the
+connection changes — only the word. (Reported by Shadow City Empire.)
+
+The Workshop page also gained a port-forwarding checklist: the mod listens on **TCP 27777**, the host's
+Windows Firewall has to allow Sandustry.exe on public networks, the joining player needs the public
+address, and CGNAT makes forwarding impossible regardless.
+
+## 0.9.143-beta
+
+**Big-factory stall introduced in 0.9.142 - fixed.** Measured on a 90,000-structure world: every structure
+snapshot froze the joining player for ~2 s (worst 5.4 s), and the client eventually dropped. Cause: 0.9.142
+started re-applying host data changes, and for each changed structure it called the game's structure
+update, which looks the structure up with a linear scan over the whole store - thousands of changes per
+snapshot times 90,000 entries. The client now updates data/filter by plain assignment and calls the game's
+update only when a tile mode (queued/frame) actually changed. A second leak closed on the way: the
+deferred remainder of a snapshot used a different signature formula than the main loop, so it was rebuilt
+forever; both now share one.
+
+**Conveyors placed over blocks (hunters01).** A structure built where terrain already is gets the game's
+*queued* state: it sits on top, the blocks stay, nothing is carved out. The joining player's placement
+arrived at the host without that information and was forced to "available", so the host built a full
+conveyor and carved the stone away (and stone is otherwise unbreakable there). The client now forwards
+the clearance it validated with, the host builds with it (queued stays queued, terrain untouched), and the
+queued/frame flags travel in structure packets so a conveyor the host lays over blocks is queued on the
+client too. Verified live: client placed Conveyor Mk.2 inside stone, host kept terrain 42 (stone) and the
+structure flagged queued; host-placed one arrived flagged on the client.
+
+Installer/auto-updater note: the place hook in `bundle.js` gained an argument; patches.json carries an
+upgrade variant so already-patched installs are migrated in place (one more launch).
+
+## 0.9.142-beta
+
+Three reports from the Workshop page, all reproduced and fixed the same day.
+
+**"Error: net.HostDirect is not a function" when hosting direct (Tobi1Kenobi).** The renderer talks to
+the network process through a small bridge appended to the game's `preload.js`. The Workshop auto-updater
+only ever *added* that bridge when it was missing - it never *replaced* an existing one - so anyone who
+installed before 0.9.79 (when direct hosting and `hostDirect` were added) kept the old bridge forever,
+even though every other file was current. The auto-updater now swaps the bridge between its markers
+exactly like the installer does, and the lobby button explains itself instead of throwing if it ever
+meets a stale bridge again.
+
+**"I can't destroy the world with the Laser when I join my friend" (Lecker Bierchen).** Every excavation
+in Sandustry carries a *profile* (`fromDrill`, `fromRocketExplosion`, `destroyNonDestructible`,
+`drillTierDamage`...) and that profile decides the material tier the dig can break - the shovel tier
+cannot touch what the laser, drill or void gun are made for. The client forwarded its digs without the
+profile, so the host replayed the laser as a shovel and hard materials stayed put. The profile now travels
+with the dig and the host replays it verbatim. Verified live: a client dig with `{fromDrill:true}` and one
+with `{fromRocketExplosion:true, drillTierDamage:3}` both arrived on the host with their options intact.
+
+Two more things the laser needed, found on the way. The laser pays 60 energy per pulse out of the
+batteries; a joining player's copy of the batteries is a mirror that could be stale, so the game could
+refuse with "Not enough power" while the host had plenty. During an active tool action the client now
+treats energy as the host's: the amount is attached to the dig and the host deducts it authoritatively -
+no power on the host, no hole (also verified live: a 60-energy dig on a world with no batteries was
+rejected with "wykop klienta odrzucony - brak energii"). And the handheld drill excavates through a
+different code path (the mutation queue, which a joining player deliberately discards), so it did nothing
+at all for a client; it is now forwarded as a 1x1 dig with its profile.
+
+**"Filters only work when host configures them" (Spiddy).** A filter's setting does not live in the
+structure's `data` - the game keeps it in a separate `structure.filter` object (filters, shakers,
+growers, filter walls all use it). The mod only ever synchronised `data`, so a filter set by a joining
+player never reached the host, and one changed by the host never reached the others. `filter` is now part
+of the structure packets in both directions: the client's near-player config scan sends it, the host
+applies it and propagates it to the simulation, and the host runs the same scan for its own filter edits
+and pushes them to everyone. Verified live both ways (client set Water, host had Water 0.8 s later; host
+set Sand, client showed Sand).
+
+While there: the snapshot "changed?" signature compared fields that the packets never contained, so it
+was constant and configuration changes coming from the host were never re-applied on a client after the
+first sight. It now hashes data+filter.
+
+## 0.9.140-beta
+
+**Teleport zones now come from the host.** Measured: host 27 zones, client 18. Zones live in
+`store.world.teleportZones` and are appended as the game reveals prefabs, so a client - which walks on the
+host's terrain but keeps its own world - ends up with a different set, meaning a passage can simply not
+work for them or lead somewhere else than it does for the host. The host now sends the zone list in the
+state packet whenever it changes, and the client replaces its own and rebuilds the entry-cell cache the
+game consults when you step into a zone. Verified live: the client's list was cut to 5 by hand and the
+host restored all 45 within seconds ("STREFY: mialem 5 -> od hosta 45").
+
+Not a bug, for the record: the client showing no entity sprites (host 38, client 0) is not missing
+creatures. That container holds visual effects - sparks, lights, lasers, timed particles - which are
+spawned by the simulation. The client's simulation is deliberately stopped, so it spawns none. Cosmetic,
+and inherent to the mirror design.
+
+## 0.9.139-beta
+
+**Deleting a conveyor could leave a red line behind.** The cleanup added in 0.9.136 only looked at
+foundation tiles (terrain types 15-18), but conveyors, shakers, velocity soakers and growers each lay down
+their own terrain type. Measured in a live world, identical on host and client so the garbage was real:
+132 orphaned ConveyorLeft tiles and 36 ConveyorRight tiles with no structure on them - a row of those is
+exactly the red line. The sweep now covers every terrain type that only ever comes from a structure
+(15-22, 24, 26) and still never touches natural ground like stone or ice. After the change those types
+disappear from the orphan count entirely.
+
+## 0.9.138-beta
+
+**A teammate's build preview could stay on your screen forever, looking like garbage you could not
+remove.** The mod draws what another player is about to place, in their colour. That preview is cleared
+when their next position packet arrives without a build intent - but position packets are only sent while
+a player moves, so someone who placed something and then stood still never sent the clearing packet.
+Verified from the report: the cell under the cursor was empty and byte-identical on host and client, with
+no orphaned tiles, dead cells, unknown element types or projectiles anywhere near - the red bar was never
+in the world at all. The preview now expires two seconds after the last confirmed intent.
+
+## 0.9.137-beta
+
+**The client was silently missing structures — measured: host 1019, client 841.** Foundation tiles arrive
+through the world mirror, but the structures themselves are rebuilt on the client from snapshots. 0.9.102
+added slicing so a 90k-structure snapshot could not freeze a frame, deferring the remainder "to the next
+snapshot" — while the host skips sending a snapshot at all when its structure set has not changed. The
+deferred remainder therefore had nowhere to come from and those structures were never built, leaving their
+tiles rendered red. The client now keeps the remainder and finishes it over the following frames on its
+own; verified live going from 841 back to 1019 with the mirror untouched.
+
+**Orphaned foundation tiles are swept continuously, not only inside a remembered demolition rectangle.**
+A tile of a building type with no live structure is garbage that renders red and that the game will not
+clean up itself. Measured after a client-side deletion: 12 such tiles at identical coordinates on host and
+client, so the mirror was faithful and the garbage was real, sitting in the host world. Host and solo now
+scan around the players every 5 seconds and remove tiles confirmed orphaned across two passes, six seconds
+apart, so a tile that is merely queued for placement is never taken. Verified with nine synthetic orphans:
+all nine removed on the next pass.
+
+## 0.9.135-beta
+
+**Progression now travels from the host instead of being chased through world ids.** 0.9.132 made the
+client load the host world whenever the ids differed, but loading a transferred save assigns a *new* world
+id, so the condition could never be satisfied and the client reloaded in a loop until it dropped out of the
+session. The rescue load is back to a single attempt per session (stored in sessionStorage so a reload
+cannot reset it), and the host now sends its unlocked buildings and item list in the state packet: the
+client adds what it is missing and drops what the host does not have, without overwriting items it already
+holds (the grabber tank and ammo are local state). Verified live: client at 11,16 / 0 tech pulled up to
+11,16,4 / 1 tech while sitting in a differently numbered world. Merging the unlocked-buildings list is
+**Cr0ss0vr's idea from PR #13**.
+
+**A hint when you try to reach your own public address from inside your network.** Direct internet hosting
+was verified end to end from an outside machine: UPnP opened the port, the WebSocket handshake completed,
+and the host streamed a full save transfer plus 969 mirror packets - 11.37 MB in 20 seconds. From the same
+LAN, though, connecting to your own public IP is refused by most routers (no hairpin NAT), which looks
+exactly like a broken mod. The panel now says so and points at the local address instead.
+
+## 0.9.132-beta
+Credit where it is due: **Cr0ss0vr** reported this as issue #12 and sent PR #13 ("allow building unlock
+state to propagate"), which merged the host's unlocked-buildings list into the client. I closed that PR as
+superseded by the 0.9.71 research fix - too early, because the symptom he described was still real. His
+report is what kept the thread alive until the actual cause showed up: the client was never in the host's
+world at all.
+
+**The client kept its own progression after joining - tools, research and buildings from its previous
+game.** The client received the host save but the reload-loop guard skipped loading it, so the save was
+only imported: the mirror painted the host terrain into the buffers of a *different* world and everything
+looked right, while the player store stayed local. Measured on a fresh host world: host 4 items / 1 tech,
+client 21 items. The rescue load used to require that the mirror had never started, which is never true
+once the mod trusts a freshly received world id - the condition is now simply "my world id differs from
+the one the host plays in", rate limited to once every 30 seconds so it cannot loop.
+
+## 0.9.131-beta
+
+**Tools worked once and then died on the client - digging in particular.** Weapon cooldowns are game-time
+stamps compared against `store.meta.time`, and every world has its own clock. The client was handed an
+inventory restored from local storage, so it also inherited cooldown stamps from a different session:
+measured `meta.time` 1,043,848 against a shovel cooldown stamped 3,106,579 - half an hour in the future,
+so "667 ms have passed" was never true again. Future-dated cooldowns are now straightened out on world
+load and on a periodic check, and the local profile no longer restores the inventory at all: progression
+(tools, upgrades, buildings) belongs to the host world the client loads, and only the player position is
+kept locally.
+
+**Half the screen turned yellow on the client with the shovel out.** Not world data - the mirror matched
+the host byte for byte - but the pause mechanism itself. The mod stopped the client with the manager
+`paused` flag, which also gates work the renderer needs every frame. Clearing that flag while holding the
+simulation at speed 0 made the artifact vanish instantly with the sand still frozen, so the client now
+brakes with simulation speed instead. The same change removes the post-autosave desync for free: saving
+toggles the `paused` flag and the game clears it when the save finishes, but nothing in the game touches
+the speed multiplier.
+
+**Grabber shaking works on the client.** Shaking is checked before harvesting in the game and takes
+priority, and the tutorial has you hold the button while shaking - so the mod's harvest hook swallowed it
+and wet sand never turned into gold or residue.
+
+## 0.9.127-beta
+
+**No more desync after an automatic save.** The game pauses the simulation worker while saving and resumes
+it when the save finishes. On a client that simulation must stay paused - it is the whole basis of the
+mirror - but the mod only re-asserted the pause on a 2 second heartbeat, so after every autosave the client
+simulated its own sand for up to two seconds. Worse, those two seconds stayed in the mirror permanently:
+the host keeps per-row hashes and believed the client already had current data, so it never resent those
+rows. The client now holds the pause for the whole save and re-asserts it the moment the save ends, then
+sends the host a map of the chunks its simulation could have touched; the host drops their hashes and
+streams them again.
+
+## 0.9.126-beta
+
+**The client grabber now behaves like the host one.** Root cause: the game allocates the grabber tank
+matrix at its maximum size and reports how many slots are actually active through `tool.data.size`
+(measured: size 225 = 15x15 while the array held 400 slots). The bridge read the array length instead,
+so the client harvested at the allocation size no matter what the player had set, and everything that
+landed outside the active window was invisible to the game - material simply vanished.
+
+Four more differences against the vanilla grabber were closed along the way:
+
+- collecting continues while the button is held, into free slots, instead of stopping as soon as the tank
+  held anything (the bridge treated "tank not empty" as "placing mode"),
+- the tank header follows the game invariant: count equals the number of filled active slots, and the type
+  lock clears when the tank is empty (a broken invariant made the game see a full tank as empty),
+- merged particles resolve to their real material through `linkedElementIndex`, exactly like the game,
+  instead of being stored as the technical "Particle" type,
+- harvest maps to tank slots by position relative to the cursor (closest first), each slot bound to one
+  cell, with pulses every 33 ms instead of every 100 ms; anything the client cannot store is put back on
+  the map instead of being destroyed.
+
+## 0.9.120-beta
+
+**Fixed a deadlock that froze the client world.** When the client renderer restarted (which the mod itself
+triggers when auto-loading the host world), its ack counter went back to zero while the host was at packet
+2651. The host read that as "client is 26 batches behind", paused sending, and the client could never ack
+because nothing arrived. Both sides waited forever. Hello/resync now reset the ack baseline, and the host
+self-heals if acks stop advancing for 8 s.
+
+**World packets now travel as binary frames instead of base64 inside JSON.** Same data, 25% fewer bytes, and
+no encode/decode work on either side (used on LAN/direct links between peers on the same mod version; Steam
+relay keeps the text path).
+
+**Large packets no longer freeze the client.** Incoming world data is applied in time-sliced portions across
+frames instead of one blocking pass — worst client frame dropped from 237 ms to ~16 ms while throughput went
+up, not down.
+
+**Grabber on the client collects as much as it does for the host.** The bridge scanned a fixed 9x9 area and
+took at most 48 items; the game actually harvests into a 20x20 tank grid where each slot is bound to a
+position relative to the cursor. The client now sends its free-slot map, the host harvests exactly into those
+slots (closest first), and pulses run every 33 ms instead of every 100 ms.
+
+**Client no longer strands itself in the wrong world.** If the mirror never starts and the client is in a
+different world than the host, it loads the host save instead of waiting for a manual Load Game.
+
+# Changelog — SandTogether (Sandustry co-op mod)
+
+*Translated from the original Polish development journal.*
+
+## 2026-08-21 (v0.9.90) — world sync roughly twelve times faster
+
+The batch limit was a NUMBER of chunks derived from an average cost, so a nearly empty piece of map — which costs almost nothing once compressed — occupied the same slot as a dense one. Joining a big world crawled along at twenty to fifty chunks per second, and that alone was enough to trigger congestion warnings even on a LAN. The limit is now measured in real bytes, with the compression ratio measured live, and candidates that do not fit go back into the queue instead of being dropped. Measured on a 9216-chunk world: 580 to 600 chunks per second at the same bandwidth ceiling, joining player keeping up, zero lag. The false lost-packet resends during the first sync are gone as well (they were resending data the client was simply still working through).
+
+## 2026-08-21 (v0.9.89) — research shared by a teammate now lands instantly
+
+The tech tree has prerequisites, but incoming research was applied in whatever order it arrived, so a child node kept being refused until its parent happened to go through — the retry loop sorted it out eventually, roughly twenty seconds later and with sixty refusals in the log. Unlocks now repeat in dependency order until nothing more can be unlocked. Found by auditing every log file on disk (15k lines) rather than by a report.
+
+## 2026-08-21 (v0.9.87 + v0.9.88) — world-transfer restart storm, and the false "OLD mod" warning
+
+A joining player could end up never receiving the world at all: they asked for the missing pieces of transfer N, the host answered by starting transfer N+1, and the joining player ignored it because "a transfer is already in progress" — forty restarts in twenty-five seconds (report and logs: Cr0ss0vr). Two safeguards added on different days were cancelling each other out. The newer transfer now always wins — pieces are already tagged per transfer, so mixing them is impossible — and the host will not restart a transfer more than once every three seconds. Measured after the fix: zero restarts where there had been forty.
+
+Also fixed: the red "OLD mod" warning shown to players who are perfectly up to date. The verdict used to be reached after five seconds of silence, but a player busy loading a world (or whose renderer has just reloaded) simply cannot answer in time; the check now asks twice more before complaining.
+
+## 2026-08-21 (v0.9.86) — one log file per game instance
+
+Two copies of the game running on one PC — the usual way people test co-op — both wrote into the same main.log, so bug reports arrived as a mix of both sides and were hard to untangle. The second instance now gets its own main-<pid>.log, and instances started with a custom user-data folder log inside that folder. Nothing changes for normal single-instance play. (Implementation note: the instance check had to live inside the logger itself — doing it at module load fails because the log directory cannot be resolved before the app is ready.)
+
+## 2026-08-20 (v0.9.85) — hotfix: endless greeting loop between the two games
+
+If BOTH players had set a custom nick, the games greeted each other in an infinite loop — dozens of greetings per second, flooding the connection and re-triggering world transfers. The greeting was sent in response to a peer-greeting event, so each side kept answering the other. Every peer is now greeted exactly once per session. (Regression introduced with the nick feature in 0.9.61, only reachable when both players had nicks set.)
+
+## 2026-08-20 (v0.9.78 - v0.9.84) — host over the internet directly, instead of through Steam relay
+
+Steam routes co-op traffic through its own relay when it cannot establish a direct link. That relay throttles bandwidth and pushed ping into the seconds (3000 ms measured), which is what produced the "swiss cheese" world on the joining side: the world protocol marks rows as delivered without waiting for confirmation, so every dropped packet becomes a permanent hole. The bundled Steam library exposes no way to force a direct connection (no session state, no relay toggle), so the mod now offers its own: **Host (Internet - direct)** asks your router to open the port via UPnP (implemented from scratch over SSDP + SOAP, no dependencies) and shows your address **masked by default**, with show/hide and a copy button that never reveals it on screen — safe to stream. Your friend pastes it into Join LAN. Bandwidth per batch was also cut to a quarter and the rate controller now reacts to ping, not just to backlog.
+
+Also fixed: the false "MOD VERSION MISMATCH" shown when connecting from the menu lobby (report: Cr0ss0vr — the renderer handshake carried no protocol number and a missing field was treated as a mismatch), a false "OLD mod" warning aimed at fully up-to-date players, a stale "no world data from host" message that stayed on screen after data resumed, and duplicate full-world queueing. Note for maintainers: the patcher now REPLACES the preload bridge instead of appending it once — otherwise new IPC methods never reach existing installations.
+
+## 2026-08-20 (v0.9.74 - v0.9.77) — sync audit: one cause behind the whole wave of reports
+
+Instead of patching symptoms one by one, the sync layer got a proper audit (written up in ANALIZA_SYNC.md). Loading a world reloads the game page, which wipes the mod session state living in the renderer, while the network connection survives in another process — so the host never learned it had to re-arm the world stream for that player. The joining player was left in the host world with a dead mirror and an unpaused game, effectively playing in a private copy: digging never reached the host, buildings did not propagate, research did not sync, and the old recovery path asked for the save again, producing the reload loop. The client now announces itself to the host after every renderer start and the host re-arms the stream immediately, sending the save only when the client really is elsewhere. Also fixed: a transfer deadlock that left clients stuck on "Receiving world" forever (requests for an older transfer were answered with chunks from a newer one), message placeholders rendering literally as {0}, and a false "no world data from host" warning during normal quiet moments.
+
+## 2026-08-20 (v0.9.73) — the real cause of "the client cannot dig" (found and reproduced end-to-end)
+
+Several reports that looked unrelated — the joining player cannot dig, the joining player mines in their own copy of the world, research does not sync, the map reloads every ten seconds — turned out to be one bug, reproduced in a two-instance test rig. Loading the world the host sends RELOADS the game page on the joining player: the mod restarts from scratch, but the network connection lives in another process, so the host never learns it should re-send the world. The joining player ends up standing in the host world with a dead mirror, playing locally, and nothing they do reaches the host. Now the client notices it is in a world without a live mirror and asks the host for the world stream itself (never for the save again, which is what used to cause the reload loop); recovery takes a few seconds and was verified end-to-end. Note: the 0.9.72 guard that was supposed to survive the reload does not — the reload wipes that storage too, which is why this fix does not rely on it.
+
+## 2026-08-20 (v0.9.72) — the auto-updater had been broken since Aug 18; reload loop root cause; tech-nak crash
+
+**Please re-run install.bat once if you installed between Aug 18 and Aug 20.** A one-line regression in v0.9.40 (the macOS walk-up change dropped a variable the updater still used) made the auto-updater throw on every launch, so installed copies silently stayed at whatever version install.bat had put there — which explains many reports of bugs that were already fixed. Fixed; after that one re-run, auto-update works again. Also: the real root of the 10-second reload loop (loading the received world reloads the game page, wiping the in-memory guards — the guard now lives in sessionStorage and survives the reload), a ReferenceError in the research-refusal path that prevented the tech-nak from ever being sent, research definitions now carry their id (no more junk tech entries), progression is applied before the tech tree, and team tech is applied only while the mirror is live. New dev tool: tools/cdp.js (drive the game window over Chrome DevTools Protocol for end-to-end tests).
+
+## 2026-08-20 (v0.9.71) — research no longer bricks (reports: Akriz, Cr0ss0vr)
+
+Symptoms: a client's research showed as "Researched" on the host but the building could not be placed and the tech could not be researched again; host research sometimes threw the client into a ~10 s reload cycle; a freshly joined player did not get the Shaker right away. Root cause (verified on game 0.5.2 and 0.5.5 — all 22 patch anchors match, so not a patch issue): the game's `unlockTech` RETURNS true/false and does nothing on false (locked tech, tutorial, unmet requirements, not enough resources, gold that cannot be deducted evenly). The mod ignored the result and set the tech flag anyway; worse, the host deducted the client's cost manually BEFORE calling `unlockTech`, which checks and deducts the cost itself — so the second check failed on missing gold (or charged twice). The client had the same problem when applying the host's tech stream (cost checked against mirrored resources already reduced by the host). Fix: `unlockTech` is now called in two modes — "pay" on the host for a client purchase (cost check skipped, the game deducts the cost authoritatively, no manual deduction) and "free" for team unlocks (temporary `bypassCosts`: no check, no deduction, no mirrored gold removed on the client). The return value is honored: on refusal no flag is set, the host sends a `tech-nak` and the client reverts its optimistic local flag with a status message; refusals on the client retry every 10 s instead of every tick. Already-bricked saves repair themselves: on entering a world (host/solo) and once the mirror is running (client) the mod checks every researched tech for missing buildings/items and re-runs the game's unlock for just the missing parts, free of charge and without duplicating items ("Repaired N broken research unlock(s)"); `SandTogether.repairTech()` runs it manually from the console.
+
+## 2026-08-20 (v0.9.70) — PR #11 by Cr0ss0vr: foundation cleanup after client demolition (issue #10)
+
+The post-demolish cleanup used to look at the drag rectangle, which does not describe a building's real footprint. The PR captures each structure's true occupied bounds (via the game's own cell lookup) BEFORE the game removes it and cleans exactly those boxes — client-ordered demolitions finally leave no foundation behind. Merged with one addition: dragging over old orphaned red tiles with no live structure still cleans them.
+
+## 2026-08-20 (v0.9.69) — 简体中文! PR #9 by NanYu_sad. (contributor #7)
+
+Complete Simplified Chinese translation, auto-detected from the system language — every string covered, including the newest ones. NanYu_sad. was one of our first testers back in the earliest releases; now they've sent code. The UI is trilingual: English / Polski / 简体中文.
+
+## 2026-08-20 (v0.9.68) — the reload loop, part 2 (report: ZeroHazard)
+
+Three belt-and-suspenders fixes against the client reloading the world every ~10 seconds: (1) the "quit to title = leave session" logic no longer fires DURING the mod's own world load (the scene passes through the menu mid-load, which used to disconnect → reconnect → re-transfer → re-load, forever); (2) the received world auto-loads only ONCE per session — repeated transfers just import quietly; (3) the host's automatic save-send after a peer joins has a 20 s cooldown, so reconnect cycles on a congested link can't spam transfers. The initial high latency on big maps is the first full sync and settles by itself.
+
+## 2026-08-20 (v0.9.67) — compatibility with game Update #2 (v0.5.5)
+
+Sandustry's Update #2 (Aug 19) renamed internals in the game bundle and 15 of the mod's 22 file patches stopped matching on the default branch — the panel still showed up (the critical frame hook survived), but client-action forwarding was dead: "only the host can mine" (reports: Drewby, Tobi1Kenobi). All patches got 0.5.5 variants, verified 22/22 on the new build AND 22/22 still matching on 0.5.2-0.5.4 (variants are additive; element/terrain enums confirmed unchanged). The repo also gained `src/check-anchors.js` — one command that audits every patch anchor against any game build, so the next game update takes minutes, not hours. Both players must update the mod AND be on the same game version.
+
+## 2026-08-20 (v0.9.66) — deleting PIPES no longer deletes blocks too (report: TCentraL)
+
+The post-demolish cleanup pass (which removes building tiles the game leaves stuck in a QUEUED state) armed itself on EVERY demolisher drag without knowing the tool mode. Deleting pipes intentionally leaves structures in the selection — the cleanup mistook them for stuck leftovers and removed them. In pipe mode the cleanup no longer arms; the game removes pipes correctly by itself.
+
+## 2026-08-20 (v0.9.65) — Multiplayer button no longer floats over the Load/Options screens (report: Psychospark89)
+
+Sub-screens replace the main-menu buttons in the DOM, which used to trigger the button's fallback position — it now hides whenever its menu anchor disappears (and recognizes the menu in five game languages: EN/PL/DE/FR/ES).
+
+## 2026-08-20 (v0.9.64) — PR #8 by AlyxiaFox (contributor #6): congestion control for the world sync
+
+The host used to push whatever the sim dirtied straight into Steam's send buffer; the reliable channel is ORDERED, so a client behind on bandwidth replayed history instead of seeing the present (measured up to 60 s behind). Now the client acks each applied batch (10 Hz, on the unordered channel so acks never queue behind world data), the host measures how far behind the slowest player is and throttles itself with an AIMD controller and a byte budget per batch — backlog waits on the host where chunks coalesce, so you get one current state instead of every intermediate frame. The PR also fixed a real long-standing bug: the mirror queue and row hashes were never reset between sessions, so hosting a second time could silently never send chunks the previous session considered delivered. Merged with review; ping/RTT also moved off the ordered channel.
+
+## 2026-08-19 (v0.9.63) — instant-kick on join + interleaved world transfers (reports: Akriz, derErste67)
+
+**Instant kick**: joining a host who was still in the MAIN MENU disconnected you within a second. The host was streaming its menu-scene buffers (an old both-in-menu "mirror test mode"), the joining client painted them and marked the mirror as started — which armed the "quit to title = leave session" logic from 0.9.53 and immediately stopped the session. Since the new lobby encourages hosting from the menu, this surfaced as "broken since the Multiplayer button". Fixed on all layers: a host in the menu no longer streams anything, the mirror never paints while you're in the menu (test mode removed), and auto-leave additionally requires that you actually WERE in a world this session. This also explains clients who "mine on their own world" while connected.
+
+**Interleaved transfers**: two world transfers could interleave into one download — the second transfer's header was ignored but its packets still landed in the first one's file, and since the host autosaves between sends, the client assembled a save stitched from TWO versions of the world and loaded a corrupted map (half the world as yellow garbage; digging looked dead because the client's world no longer matched the host's). Every transfer now carries an id, foreign packets are dropped, and the host won't start a new transfer while one is still sending.
+
+## 2026-08-19 (v0.9.62) — big-map progress + a panel you can actually hide (feedback: TCentraL)
+
+The initial world sync now shows real progress — "host mirror: X KB/s, Y chunk/s — N chunks left" counts down to zero, and the long save-load phase says "Loading the host's world... (a big map can take a few minutes)" instead of looking frozen. Collapsing the panel (header click / Ctrl+Shift+H) now shrinks it to a tiny "ST ●" pill with a status-colored dot instead of leaving the full-width header.
+
+## 2026-08-19 (v0.9.61) — community feedback batch: Linux CRLF guard, host-in-menu fix, player nick, save picker
+
+(1) The Linux installer now heals itself when a download or editor converted it to Windows line endings — the exact crash PsychoSpark hit on CachyOS ("set: pipefail: invalid option name"); it also survives being run with `sh` instead of `bash`. (2) A Steam player joining BEFORE the host loaded a map no longer triggers a speculative world transfer that reloaded the client's map forever (report: TCentraL) — the host now answers "world-wait" until it actually enters a world, and the client shows "waiting for the host to enter a world". (3) You can finally set your NICK (LAN players were all "Player") — a field in the lobby, stored locally, announced over the existing hello protocol. (4) The host lobby gained "📂 Choose a save..." next to "▶ Load last save & PLAY". (5) The menu Multiplayer button is bigger and shows a green connection dot when you're hosting/connected.
+
+## 2026-08-19 (v0.9.60) — session status you can actually SEE
+
+The panel now always shows a colored role badge — "○ OFFLINE" (red) / "● HOSTING (Steam/LAN)" (green) / "● CONNECTED — you are a player" (blue) — plus a live player list (nick, host marker, mod-version match). Buttons are contextual: offline shows only the ways to connect, a host sees Invite/Send world/Stop, a client sees Resync/Stop — no more wall of nine buttons. Chat logs who joined/left. The host lobby shows the two steps that matter (1. invite, 2. hit PLAY) and hosting errors are surfaced instead of failing silently. The menu Multiplayer button is bigger.
+
+## 2026-08-19 (v0.9.59) — MULTIPLAYER button in the main menu + a real lobby; reload-loop hotfix
+
+**New UI**: the main menu now has a proper **Multiplayer** button (styled like the game's own menu, placed under Mods/Maps). It opens a full-screen lobby: Host (Steam) / Host (LAN) / Join LAN (ip+port) / Join by Lobby ID — each with a description; when hosting you get an invite button, a masked lobby id (click = copy), a live player list (nick + mod version) and a one-click **"Load last save & PLAY"** — the world then sends itself to joined players automatically. The corner panel stays for in-game status/chat.
+
+**Hotfix for 0.9.58's reload loop** (live report: TCentraL): the new save re-request combined with auto-load could reload the same map over and over. Now a received world silences further requests for the session, auto-load is skipped when the mirror is already running, a world transfer arriving mid-receive is ignored (this caused the retry storm), requests are capped at 4 per session, and the client asks for a full resync right after auto-load (so the mirror starts even when there is nothing new to apply).
+
+## 2026-08-19 (v0.9.58) — big-map join & freeze fixes (live report: TCentraL)
+
+Joining a host on a BIG map could freeze the game and strand the client on "Waiting for host's world". Three structural fixes: (1) AUTO-RESYNC — the initial full-world stream used to be sent while the client was still in the menu (where the mirror must drop it), and the host's row-hashes considered it delivered, leaving stale holes until a manual Resync; the client now automatically requests a full resync the moment the mirror starts applying. (2) The world mirror no longer writes into the game's buffers WHILE the host's save is being loaded (a race with the engine's loader — the likely freeze). (3) Self-healing save transfer: a client that never receives the world save (e.g. after a reconnect, when the host's auto-send doesn't re-fire) now actively requests it every 10 s. Plus much better console diagnostics around the whole transfer path.
+
+## 2026-08-19 (v0.9.52 – v0.9.57) — live-session fixes, QoL, augments, Linux installer
+
+**0.9.52**: Shaking works for the joiner regardless of the host's own toggle (report: TCentraL) — the toggle lives in `mods.grabberSizeScroll`, which the host's 1 Hz mods stream was overwriting; per-player preferences are now preserved when applying the stream (all 8 shared-storage keys audited — the rest are legitimately team-shared).
+
+**0.9.53**: quitting to the title screen as the joining player cleanly LEAVES the co-op session (suggested by tony.s.jennette) — the per-world profile (position + inventory) is saved first, so rejoining puts you right back; no more half-connected ghost state after ESC → Quit.
+
+**0.9.54**: grabber place REFUND — when the host cannot place your element (target cell occupied), it returns to your tank instead of silently vanishing; the last known way to lose items with the grabber.
+
+**0.9.55**: separate IP and PORT fields for Join LAN (QoL suggested by TCentraL) — pasting `ip:port` auto-splits, Enter connects from either field, port validated.
+
+**0.9.56**: the augment/lab screen no longer LOCKS the joining client until the host picks (report: TCentraL) — the choice stays team-shared, but now EITHER player can make it: the client's pick is forwarded to the host (500 ms diff of `mods.augments`), the host applies it authoritatively and the stream closes the overlay for everyone; a 5 s protection window keeps the in-flight pick from flickering.
+
+**0.9.57**: LINUX installer (experimental) — `install-linux.sh` + a cross-platform `install.js` (one payload now serves macOS and Linux): finds Steam in classic/XDG/Flatpak locations and extra libraries, runs on the game's own native Linux Electron binary via `ELECTRON_RUN_AS_NODE` (no Node.js needed), kills only OTHER game processes (the installer itself runs under the game binary). Requested by Psychospark; untested by the author — Linux testers welcome.
+
+## 2026-08-19 (v0.9.49 – v0.9.51) — night-report batch, PR #6, tool-audit closure
+
+**0.9.49**: red-block contamination fixed (the mirror refuses to paint when the client is in the menu; world trust is PAIRED — host wid + the client wid it was granted for — so loading a different world cleanly rejects); infinite phantom items fixed (all client→host forwards gated on an active mirror; tool state resets on local world change); tech nodes researched by a teammate no longer show unpurchased (unlockTech does not set the node flag — we do, both sides); demolish leftover sweep retries 3→6 at 400 ms; streamer-safe lobby id (masked, click copies).
+
+**0.9.50 — PR #6 by TCentraL/tno1 (contributor #5)**: orphan red-tile cleanup blob-expands to the whole contiguous patch, even outside the drag. Review hardening: sloped/stair tile types restored, per-cell live-structure check (healthy painted foundations safe), scan-loop fix, 64-cell expansion cap.
+
+**0.9.51**: manual wet-sand shaking works for the joiner — the tank mutates locally (gold OK) but the residue was spawned into the world via the deferred queue the paused client drops, and the factory process only counted locally; a new bundle hook batches refined slots to the host, which spawns Residue into empty cells only and records the ShakeWetSand process. Picked-up items land in the correct picker slots (host sends per-element cursor-relative offsets; the tank grid is spatial like vanilla). Sweeper confirmed covered by the PR #4 drone sync. Last unidentified tool: placeholderGun/wall tool (safely inert on the client).
+
+## 2026-08-18/19 (v0.9.40 – v0.9.48) — macOS, community PRs, the Workshop freeze, weapons complete
+
+**0.9.40-0.9.41**: macOS support — DwoaC's tested installer/launcher (PR #2) replaced the blind-built scripts; his PR #3 fixed Steam invites on macOS (the osx steamworks binary reports callback fields in snake_case). Fixes for his reports: the WS server now sends its hello (no more false OLD-mod warning on LAN) and the orphan sweep arms on replayed client demolishes. Auto-updater path made platform-agnostic (walks up to steamapps). DwoaC = contributor #3.
+
+**Workshop freeze incident (18-19.08)**: 25+ publishes in 48 h tripped Steam's rate limit — the Workshop silently served 0.9.36 files while newer publishes reported success. Recovery: GitHub Releases as fallback distribution, one consolidated publish after the limit cleared, hard server-side verification (time_updated + fresh subscription download) now standard after every publish. Iron rule: max 1-3 Workshop publishes per day.
+
+**0.9.42-0.9.44**: research FULLY shared — the game's real unlockTech runs on both sides, so buildings, items and the map materialize for the whole team (report: ЗаКеЛьМан); the grabber respects research gates (liquids need the team's waterGrab upgrade) and locks its tank to ONE element type like vanilla (reports: derErste67).
+
+**0.9.45-0.9.46**: client-demolish sweep no longer eats neighboring painted-foundation tiles; honest REAL/FALLBACK tech-unlock logs; Cr0ss0vr's PR #5 (contributor #4) — the client sends its exact demolisher selection rectangle, so red-tile cleanup is precise, with a bounded retry for queued removals.
+
+**0.9.47-0.9.48**: Knight-HD's PR #4 — client rockets & guns simulated authoritatively in the host's sim (real explosions), client-deployed drones survive, no double craters; on top: the flamethrower can no longer delete terrain/foundations/scenery (terrain cells untouchable in the replay), drone id collisions re-assigned. Full weapon audit: volcanizer and caulk blaster forwarded with vanilla guards baked in (lava/caulk only into empty cells; caulk removal exactly by the game's rule).
+
+## 2026-08-18 (v0.9.39-beta) — AUTO-UPDATE from the Workshop (install.bat needed only ONCE, ever)
+
+At every game launch `st-main.js` compares the mod version in `steamapps/workshop/content/2764460/<item>/src` (kept fresh by Steam) with the installed one (numeric compare — the author's newer local build is never downgraded). Newer → copies `sandtogether.js`/`st-main.js`, appends the preload bridge if missing, applies `patches.json` to `bundle.js` (a port of install.ps1's idempotent variant logic) and relaunches the game once. No relaunch loop (after the update local == workshop). Version drift between players — the #1 cause of "nothing works" reports — now solves itself.
+
+## 2026-08-18 (v0.9.37 + v0.9.38) — the whole nice-to-have list delivered
+
+**0.9.37**: per-player profile (localStorage keyed by trusted host worldId: position + inventory, saved every 10 s and on disconnect/stop, restored when the mirror starts); machine-config sync (no game event exists, so a 0.8 s JSON-diff scan within 48 cells of the player detects `structure.data` edits → `act:sdata` → host applies + propagates; 6 s protection window against the snapshot reverting the fresh edit); team chat (panel input with keystroke isolation, textContent-only rendering, host relays between clients); host now relays `chat`/`myproj`/`snd` for 3-4 player sessions; instant item drops (host pushes the worldItems list whenever its id set changes, checked at 5 Hz).
+
+**0.9.38**: ROW-DELTA world protocol v5 — per-row FNV hashes (~1.5 MB host RAM) select only changed 40-cell rows; a chunk is header + 5-byte row mask + selected rows × 6 layers (12 B/cell); typically 2-10× less bandwidth (horizontal flow = 1-3 rows instead of 40). Replaces the whole-chunk hash-skip; `enqueueFullWorld` clears the row hashes so new joiners get everything. Critters collected by the client are now removed from the host's map too (splice from the live `FH.entities.getAll` array + hide sprite + remove light — no official remove API). Steam auto-rejoin: 2 P2P connect-fails within 10 s → rejoin the last lobby every 3 s, max 5 tries. Game-build fingerprint (bundle size + sha1 of the first 256 KB) exchanged in `mver` — mismatched game builds now warn in red instead of silently corrupting element enums.
+
+## 2026-08-18 (v0.9.36-beta) — optimization: fog-skip + LAN auto-reconnect
+
+World stream skips chunks whose shadowMap is fully 255 (undiscovered — the client sees black there anyway; 255 = undiscovered confirmed in the bundle). Revealing changes the shadow → chunk dirties → streams normally. Initial fill on a big map (9216 chunks, ~20-30% discovered) = joining 2-4× faster. WS auto-reconnect: retry every 3 s, max 5 attempts; the counter rides the `joinWs(_retry)` parameter so it survives socket instances; a successful handshake resets the budget.
+
+## 2026-08-18 (v0.9.34 + v0.9.35) — SHARED research pool + closing the "partial/one-way" list
+
+**0.9.34 (G2)**: upgrades/tech = SHARED TEAM POOL. Client hooks `upgrade:purchased`/`tech:unlocked`; the real cost is computed as the resource diff vs the last host snapshot (re-based per purchase). Host sets the levels, deducts costs authoritatively (store.resources + gold/energy SABs, clamped) and re-emits. The res packet carries upgrades/tech/progression; the client merges levels only upward (no flicker while an act is in flight).
+
+**0.9.35 (items 1-5)**: pipe demolition by the client (a bundle patch exports the game's own pipe-demolish fn on window; client forwards the rect, host calls it); story steps triggered by the client (host appends to `storyProgression.completedSteps`, idempotent); critter collection by the client (store.creatures counters + first-catch conservatory tickets, 1:1 with the game's logic); signals (link/unlink → `FH.signals`), signal buttons and blueprint copy-paste executed by the host; host-pause heartbeat (a 1 s setInterval survives the paused sim → the joiner sees "Host paused — world frozen" plus a stall indicator); fast rejoin (`_lastGoodWid` survives sessions — reconnecting to the same host world is trusted immediately, no save re-transfer).
+
+## 2026-08-18 (v0.9.29 – v0.9.33) — live-debug session: client demolish + the red undeletable blocks
+
+0.9.29: hotfix — the demolisher rect from `H(e)` is already in cell coordinates; 0.9.28 divided by cellSize again, scanning a wrong 4× smaller area and silently doing nothing ("nothing happens, no log" — TCentraL). Every `_demol` code path now logs. 0.9.30-0.9.33: the red undeletable blocks turned out to be **orphaned foundation tiles** — the structure object was long gone but its tiles (terrain Block=15..SlidingBlockRight=18) stayed written in the world, and the game only clears tiles when demolishing a live structure. The post-demolish sweep now detects building tiles with NO live structure at that cell and removes them via `FH.terrains.removeAt` (healthy foundations are never touched). Confirmed live: 112 tiles cleaned across 3 stuck blocks. Works solo, host and co-op.
+
+## 2026-08-18 (v0.9.28) — client demolish, foundation data, factory-process sync (TCentraL's reports)
+
+(1) Demolishing as the joining player only recolored structures red: the actual removal ran inside the paused local simulation and never executed. New `_demol` bundle hook intercepts the demolisher drag (unique anchor in the tool tick's End branch), resolves affected structures from the mirrored store via getAtCell over the selection rect and sends them through the existing act:demolish channel. (2) Foundations (incl. sloped) placed by the joiner could not be deleted even by the host: `ST._place` dropped the structure's `data` (shape/box/color), so the host built a degenerate copy. Data is now JSON-cloned and forwarded. (3) "Shake Wet Sand" is a factory process whose counters live in the `factory.processing` SAB — never covered by the mirror, so the joiner always saw zero progress. The host now streams the counters in the 1 Hz res packet.
+
+## 2026-08-17/18 (v0.9.26 – v0.9.27) — Knight-HD's pull request merged + review hardening
+
+Merged PR #1 by **Knight-HD** (dkdknight): `_place` bundle hook (the game turned building placement into a non-cancelable interceptor; numeric structure types were silently dropped — this was "can delete but not build"), host-side grabber rework, mirror protocol v4 (+1 B/cell element type), teammate build ghosts & grabber crosshairs, dirty-cell priority lane, additive reconcile, "0.5.4" anchors. Review hardening on top (0.9.27): a `_grab` anchor variant for our Steam build (Steam serves different builds to different people — his anchors matched 0× here), world-trust reset between sessions, staged ghost cleanup (delete only after 3 consecutive absent snapshots + 30 s grace) instead of never deleting, capacity-aware grab harvesting and a per-peer host rate limit.
+
+## 2026-08-17/18 (v0.9.8 – v0.9.9) — mod-version exchange
+
+The version-mismatch warning only reacted to protocol changes, so a player on an old mod triggered no alarm (the exact "nothing works" case — one tester was on 0.9.0 without knowing). Players now exchange exact MOD versions on connect (`mver`); a mismatch shows red with both versions, and a peer that doesn't answer within 5 s is flagged as "OLD mod (≤0.9.7)". Also open-sourced the repo (github.com/IronBamBam1990/sandtogether, MIT).
+
+## 2026-08-17 evening (v0.9.7-beta) — LIVE DEBUG of user's session ("nothing works, my buddy is a spectator")
+
+Diagnosis from the host's live logs (%APPDATA%\Sandustry\logs\main.log) + client/host logs from other players (Downloads/drive-download-20260817T185810Z):
+
+1. **The game updated TODAY** (app.asar.bak 18:53, re-extract 19:30; package.json STILL says "0.5.2" — the devs don't bump it!). The new build renamed the API: `structures` disappeared from the top-level FH (along with launchers/misc/grid), and `reactions/excavation/processing/signals` were added. The mod called `FH.structures.build/removeAt/getAtCell/update` → undefined → **the client couldn't build**. FIX: `structNs()` — dynamic resolver (searches for a namespace with build+removeAt+getAtCell at top level and 1 level deep, cached in ST._structNs). The structures:placed/removed/moved + grabber:elementPickedUp/Placed events DO EXIST in the new build (verified via grep), the Fire=11/FreezingIce=12 enum is unchanged.
+2. **The stream couldn't keep up**: chunk queue 3962→8631 and not dropping (SYNC-HOST log), 400 chunk/s cap, distance-based sorting STARVED far chunks indefinitely → the client saw a world 20+ s stale → 348× "grabPlace CONFLICT", building/tools acting on "the past". FIX: two lanes — fast lane = ALL dirty chunks within a 24-chunk radius of every player (cap 120/batch), slow lane = the 20-40 oldest FIFO (Set = insertion order, zero starvation) + **hash-skip** (FNV-1a per chunk; identical content → don't send; hashes.clear() in enqueueFullWorld so a resync/new player gets everything!).
+3. **G1 confirmed live** (log from the other players: "Client simulation: resumed"): the game's ESC menu sends SetPaused(false) → silent double simulation. FIX: re-pause heartbeat [54,true] every 2 s in the client's _frame (idempotent).
+4. **G8**: peer-disconnected NO LONGER unpauses the client (silent world fork) — the world stays frozen, solo = the Stop button.
+
+node --check OK, published (public). BOTH players must: install.bat + restart. VER 0.9.7-beta.
+
+## 2026-08-17 (v0.9.6-beta) — fixes from full code review of 0.9.3–0.9.5
+
+A reviewer agent verified the 0.9.3–0.9.5 changes (report in history). The 0.9.4 grabber fix confirmed correct (Uint32 alignment OK: sim = Uint32Array(buffer,0,W*H); zeroing only cellIds is DELIBERATELY right — the grabber decides solely by cellIds, mapData=render=host mirror). Fixed findings:
+
+- **B1 (BUG)**: after connecting via Join LAN the IP field kept keyboard focus → the game ignored WASD (the game's global keydown skips INPUTs) until a click on the canvas. Fix: after a successful connection `lanRow.hide()+blur()`; additionally stopPropagation on the input's keydown/keyup (the game's keyup does NOT filter INPUTs — R6).
+- **R1**: `_fireQ/_cryoQ` cleared on "joined"/"stopped" — stale coordinates won't leak into another world/session.
+- **R2**: the `_fire/_cryo` hooks now require `ST.wsx.paused` (mirror active) — a client that is connected but on its OWN world has weapons working normally locally and forwards nothing (the coordinates would be meaningless in the host's world).
+- **R4**: adaptive grabber grace: `grabGraceMs() = min(3000, max(1200, 3*ping+300))` — the fixed 600ms was shorter than a round trip at 300ms+ ping (Switzerland↔Poland!) and duplicates were coming back under lag.
+- **R5**: symmetric PLACE protection: `_placedCells` + a sentinel (cellId=1) in the placed cell — the placement loop reads local cellIds and would target an "empty" (mirror lag) cell again with the next slot → host createAt no-op on an occupied cell → the element was lost. The host additionally logs the grabPlace conflict (cell occupied = client's element lost — a rare divergence, refund TODO requires access to the tank matrix).
+- **N1**: `_grabbedCells/_placedCells` cleared on joined/stopped. **N4**: try/catch on the flush sends (an exception would propagate out of _frame into the game's emit).
+
+DEFERRED (documented): R3 — RJ_FIRE=11/RJ_FREEZINGICE=12 are build-specific with no runtime guard (a peer on a different game build with a reshuffled enum would create the wrong element; only a real issue when GAME versions diverge between players — the mod already requires the same mod version anyway). N3 — fireB/cryoB are approximations (default burn time instead of distance-scaled; static ice instead of particles with velocity) — acceptable.
+
+node --check OK, published (3784750764, public). VER 0.9.6-beta.
+
+## 2026-08-17 — GAP AUDIT toward "100% playable" (agent report in history)
+
+GAME-BREAKING: **G1** the client's ESC silently unpauses the sim (the pause menu sends its own SetPaused(false), ST.wsx.paused stays true → never re-pauses → double simulation on the mirror). **G2** upgrades/tech/augments not synced at all (a client purchase = free, fluxite comes back after 1s via res; the host doesn't know the client's levels). **G3** a host sitting in the main menu poisons the client (res/snap/ent have NO worldId/scene guard — only wc does; menu = a small world → overwrites resources, DELETES the client's structures after the 6s grace).
+MAJOR: **G4** host pause freezes sync with no notification (frame:update doesn't fire). **G5** signals/automation, machine config (structure.data), client blueprint copy-paste get reverted — endgame is host-only. **G6** story/objectives/stratacores/boss/viability/discoveries/critters one-way or not at all (client triggers → reverts after 1s). **G7** no per-client persistence (join = reset to the host's save) — hard. **G8** disconnect = silent fork (an unpaused client keeps playing, loses everything on rejoin; no WS auto-reconnect). **G9** client drones possibly overwritten by the 10Hz ent stream (UNVERIFIED whether the client deploys directly at all).
+MINOR: G10 no chat; G11 relay only for pos/hello (3+ players: myproj/snd not relayed); G12 drops only via the 2.5s snap; G13 tutorial/hints/options divergence; G16 anchor fragility to game updates (the biggest operational risk).
+CONFIRMED NON-ISSUES: no player death/health in the game (store.player has no health, 0 hits for "respawn" in the bundle).
+ROUND PLAN: 1) G1+G3 (small, protect against corruption) 2) G2 (economy; USER DECISION: shared upgrades vs per-player) 3) G6+G5 (full campaign) 4) G4+G8+chat.
+
+## 2026-08-17 (v0.9.5-beta) — JOIN LAN: IP input field (bug reported by 星灵)
+
+Bug: "Join LAN" used `window.prompt(t("join_prompt"),...)` to enter the address — and **Electron/Chromium does NOT support `window.prompt()`** (renderer: no-op, the dialog never shows). Result: no interface to enter the IP. (Join by Lobby ID was fine — it uses the clipboard, not prompt.)
+
+Fix: a built-in input field in the panel (`#st-lan-row`/`#st-lan-addr`, placeholder "ip or ip:port", default 127.0.0.1:27777). Clicking "Join LAN" shows the row and focuses the input; a second click / Enter / the "Connect" button connects via `net.joinWs(h,port)`. i18n `btn_connect` (EN "Connect"/PL "Połącz"). No protocol changes. node --check OK. Published (3784750764, public). VER 0.9.5-beta.
+
+## 2026-08-17 (v0.9.4-beta) — GRABBER FIX (re-grabbing / duplicates in the tank)
+
+Root cause found: the client grabs a cell → the tank fills synchronously (tool data), BUT the cell's removal from the world goes through the deferred Lu queue, which does NOT drain on a paused client → the cell "stays" in cellIds → the grabber grabs it AGAIN every frame (tank full of duplicates) until the host mirror (~100ms) removes the cell. That was the "grabber doesn't work right".
+
+Fix (surgical, host-authoritative, world/tank split):
+- **`grabClearLocal(state,x,y)`**: on `grabber:elementPickedUp` the client zeroes the cellId locally IMMEDIATELY (`new Uint32Array(sim.buffer,sim.byteOffset,W*H)[idx]=0`) → getCellId→0, isCellIdElement→false → the grabber sees empty, doesn't grab again. Records idx→ts in `_grabbedCells`.
+- **Protection against restoration by the mirror**: in `applyWorldBatch`, after applying chunks I iterate `_grabbedCells` (600ms grace): if the host already shows 0 → confirmed, remove from the list; if still non-zero (host hasn't processed grabPick yet) → zero it again. Self-terminates once the host confirms.
+- The split is correct: **world = host-authoritative** (the host does `FH.elements.removeAt`/`createAt` from forwarded grabPick/grabPlace), **tank = the client's local inventory** (fills/empties instantly). Zero double-count (the host does NOT touch the client's tank).
+- A small visual lag remains (mapData catches up via the mirror in ~100ms) — an inherent round trip, but grabbing now behaves correctly (one cell = one tank entry).
+
+No changes to patches.json/protocol (grabPick/grabPlace same format). VER 0.9.4-beta. node --check OK. Published to Workshop (3784750764, public). Both accounts must update.
+
+## 2026-08-17 (v0.9.3-beta) — flamethrower + cryoblaster for the client
+
+An agent mapped the 3 tools (report in history). Root cause: they all write through the deferred Lu queue, which doesn't drain while the client is paused → no-op (flame/cryo) or divergence (the grabber writes its matrix synchronously).
+
+Done (weapons):
+- **Flamethrower**: patch `flamethrower fire hook (A)` — anchor `s=0)=>{if(t<0||n<0||...` (1× in the current build). `_fire(e,x,y)` on the client: queue the cell + return true (skip). Host: `FH.fire.burnElementAt` + `FH.elements.createAt(RJ_FIRE=11)`.
+- **Cryoblaster**: patch `cryoblaster freeze hook` — anchor `x={x:Math.cos(b)*U...};(0,h.Lu)(e,i,l,...` (1×). Inserted as a sequence (not an early-out) `_cryo(e,i,l),` before Lu — Lu no-ops on the client (dropLu while paused). Host: `FH.elements.createAt(RJ_FREEZINGICE=12)`.
+- **Batching**: fire/cryo queued (ST._fireQ/_cryoQ, cap 2000) and sent every 60ms as {act,fireB/cryoB,c:[x,y,...]} — doesn't flood the network (cryo ~540 cells/s).
+- RJ_FIRE=11, RJ_FREEZINGICE=12 (from the current build's enum, `Fire=11]="Fire",FreezingIce=12`). Build-specific.
+
+NOT done: **grabber** — it's a Tool with a tank (matrix) in the tool data; it writes the matrix SYNCHRONOUSLY + the world through Lu (deferred). The delay = an inherent host-authoritative round trip. A clean fix (early-out tick + host driving the tank) is complex and risky (the tank is the player's inventory) — I'm keeping the current event forwarding (grabber:elementPickedUp/Placed), which has the right shape, just with latency. 2-instance test: no errors. VER 0.9.3-beta.
+
+## 2026-08-17 (v0.9.2-beta) — FIX client building + digging ns fix
+
+Fixing "auto-delete" of client structures (without waiting for logs — from code analysis):
+1. **Host force-place**: replayAction "place" → buildOne(...,true). Cause: building:place fires on the client AFTER its own collision check (clear on their side), but the host runs a 2nd check on its own state (minimal divergence) → build null → nothing comes back. Fix: the host trusts the client's validation (clearance:-1).
+2. **Grace period in reconcile** (6s): don't delete structures placed in the last 6s (the host may not have included them in the snapshot yet / key divergence due to the structure offset). Map `_structApplied` (key→ts) set in applyNetStructs + reconcile.
+3. **findApi multi-ns**: the current build has the FH namespace **`excavation`** (not `patterns` like 0.5.3!). Dig replay: `findApi("excavate",["excavation","patterns"])`. Detected from the FH keys log. This could have been breaking dig replay on the current build.
+- Building diagnostics (CLIENT forward place / HOST placed/NOT placed) stay.
+
+NOT fixed (need further work): grabber delay (inherent host-authoritative round trip), flamethrower/cryoblaster (Fire/Ice via createAt — a different path, no simple unique anchor, not patching blindly). 2-instance test: no errors. VER 0.9.2-beta.
+
+## 2026-08-17 (v0.9.1-beta) — TCentraL feedback: building diagnostics
+
+Feedback (0.9.0-beta): models+movement OK ("really great"). 3 client bugs:
+1. **Client building "auto-deleted"** — structures don't get confirmed. Our path: building:place cancel+forward → host buildOne → {st,add}. Suspicions: (a) host build returns null (wrong type name structureId vs what build expects / collision on the host), (b) the building:place cancel doesn't work on this build → the client places locally → snapshot reconcile deletes it because the host doesn't have it. Added DIAGNOSTICS: CLIENT forward place (structureId,x,y) + HOST placed/NOT placed. Need TCentraL's logs.
+2. **Grabber delay** — inherent host-authoritative lag (round trip); the client forwards the grab, the host executes, the mirror comes back. Without local prediction (rejected by user decision) it won't go away. To consider: light prediction for the grabber only.
+3. **Flamethrower/cryoblaster** — don't work for the client: they use a DIFFERENT world-mutation path (fire/frost) than DN/setCell, so they aren't hooked. Need to find their hooks (future).
+
+VER 0.9.1-beta.
+
+## 2026-08-17 (v0.9.0-beta hotfix) — DEMYSTIFYING "0.5.4" + installer fix
+
+**BREAKTHROUGH: there is no unsupported 0.5.4.** The user updated the game to the latest on Steam → app.asar still package **0.5.2**, buildid 24719878 (same as before). Steam does NOT have a newer build. The "0.5.4" players see = the DISPLAYED version (in-game/store), different from package.json. Test: all 9 anchors match the CURRENT bundle.js (frame v0, the rest v1). **The mod fully supports the current build.**
+
+ЗаКеЛьМан's real problem = the mod wasn't loading, because Steam kept restoring app.asar (the game loads the asar instead of the app folder). install.ps1 fix:
+- When `app.asar` is PRESENT (Steam put it back: fresh install OR auto-update) → **delete the old app folder, extract FRESH from the current app.asar**, delete the old .bak, rename app.asar→.bak. Guarantees the app folder = current build and the asar is out of the way.
+- When app.asar is absent but the app folder exists (normal modded state) → skip (re-patch only).
+- Tested in ЗаКеЛьМан's state (asar restored + old folder): fresh re-extract of 0.5.2 → 9/9 patches [+] → boot OK, mod active.
+- Installer DONE: removed the outdated "F9" mention, added a tip about disabling Steam auto-update.
+
+Takeaway for players with "can't connect after 0.5.4": just **run install.bat again** (it now handles the Steam swap itself). The game version is NOT the problem.
+
+## 2026-08-17 (v0.9.0-beta) — MERGE of dotNine batch 2
+
+After reading dotNine's code (models/grabber/resDelta sections), merged onto our base:
+- **Player models** (the hardest, Tier 2): puppets = real sprites cloned from `state.session.rendering.pixi.sprites.player.*`, added to the game's rendering parent. Synced in pos: tools (visible parts), facing (scale.x), aim (atan2 to cursor, world-space), trail (alpha). Position via `FH.rendering.getDrawPos` (world→screen). Dead reckoning (vx/vy/tUpdate, cap 3px/ms, stall→v=0). Parts rebuilt only when the set changes. muzzleFlash when the projectile count rises. Nickname still on the 2D canvas. Puppet cleanup on disconnect/stop. ANCHOR_DX/DY/aim-mirror constants = for visual tuning (dotNine marked them as unverified himself). Pos rate 50→33ms.
+- **Grabber**: grabber:elementPickedUp/Placed events → {act,grabPick/grabPlace,x,y,et} → host FH.elements.removeAt/createAt. Fixes NanYu's bug 2 (wet sand).
+- **resDelta** (bidirectional resources): the client sends INCREMENTS of store.resources every 1s (vs _resSnapshot rebased after each res from the host); the host adds them to its own. The client's earnings no longer vanish on disconnect.
+- **NOT taken** (user decision): dotNine's local spray prediction (we stay host-authoritative), dig gating (we forward everything).
+
+2-instance test: no JS errors, sync/pause OK. Player models: the code loads cleanly, but real puppet rendering requires a test in a world with 2 accounts (the autotest is in the menu) → BETA. VER 0.9.0-beta, PROTO_VER 5.
+
+## 2026-08-17 (v0.8.0-beta) — MERGE of dotNine's contribution (co-author)
+
+dotNine (a community member) sent an extended version (based on our older one). An agent did the review; merged onto OUR current base (multi-version/host-authoritative/reliable transfer stay ours). Batch 1:
+
+- **cellIds sync (client collision) — wc protocol v2→v3.** worldBuffers returns `sim` (sh.sim.cellIds); serialization 7→11 B/cell (+4 sim); the client writes the layer into sim.cellIds. Effect: a dug hole IS real for the client (they can walk into it). Consistent with host-authority (the client doesn't author, it just receives the grid). PROTO_VER 4→5.
+- **Fix for dig replay on the host**: `findApi("excavate","patterns")` — FH.world.excavate "looks right but does nothing", the real one is FH.patterns.excavate (dotNine's discovery). findApi got preferredNs + .bind.
+- **Auto world transfer**: host auto-sends on player join + a continuous `_autoSentWid` poll in _frame (send each world once); the client auto-loads via `FH.game.load` after import + a trust window `_pendingTrustUntil`/`_trustedWid` (the engine assigns a new worldId after load → without trust, subsequent wc would be rejected). Eliminates the manual "Send world→Load Game" (Warlow's problem).
+- **Join by Lobby ID (clipboard)**: clickable #st-lobbyid (copy) + a Join-by-ID button (paste, regex \d{5,}, net.joinSteam). Bypasses Steam invites.
+- **Off-screen player arrows** + per-player colors (PEER_PALETTE, peerColor hash, drawOffscreenIndicator).
+- **Ping/RTT** (ping/pong, EMA, #st-ping).
+- Credit: dotNine as Contributor (code header, HUD by-line, Workshop description, changeNote).
+
+2-instance test: no JS errors, v3 sync works, ~40-75 KB/s (+57% due to cellIds — OK, only dirty chunks in real play). VER 0.8.0-beta.
+
+DEFERRED to batch 2 (Tier 2/extras): player models with equipment (fragile, deep PIXI coupling — needs tuning), grabber tool (grabber:elementPickedUp/Placed), bidirectional resDelta (client resources). User decision: spray stays host-authoritative (we do NOT take dotNine's local prediction), dig gating — ours (forward everything).
+
+## 2026-08-17 (v0.7.0-beta) — REBUILD: host-authoritative client (NanYu's bugs 2+3)
+
+An agent mapped placement (report in memory): `building:place` (Q:1969) cancellable = a CLEAN no-op; foundations write cells DIRECTLY (te→Gz/B→setCellId+mapData, not the Lu queue) → a paused client writes them → phantoms. `l.Tn`(A:44735) adds store+cache without writing cells; renderer O:62058 draws from store.structures+cache.
+
+Changes (the client NEVER writes to the world locally):
+- **building:place hook** (new, game event): client (not applyingNet) → forward `{act,place,type,x,y}` + return true (cancel local placement, zero writes). Covers ALL placement (pipes/foundations/machines go through this point).
+- **structures:placed**: now only the HOST broadcasts its own (the client cancels before the write).
+- **_setCell** (B/Gz): the client NEVER writes cells — return true always; player spray → forward; during applyingNet → silent skip (terrain from the mapData mirror).
+- **replayAction {act,place}**: the host places authoritatively (buildOne without force, real collision check) → broadcast {st,add}.
+- **buildOne(state,s,force)**: force=true (client rendering confirmed structures) → `{x,y,clearance:-1}` bypasses the Q collision check (−1 ≠ any Blocked enum); cells are skipped by _setCell anyway → sprite only. applyNetStructs/applySnapshot → force=true; host → without force.
+- Diagnostics: log a failed placement on the host.
+
+2-instance test: no JS errors, sync/pause OK. **Placement needs player testing** (the autotest doesn't click). VER 0.7.0-beta, PROTO_VER 4.
+
+Limitations for testers to check: conveyor orientation (building:place doesn't carry the angle), pipes sync via the 2.5s snapshot (not instant), hauler-line data (origin/target/lineId) may need extra sync.
+
+## 2026-08-17 (v0.6.4) — NanYu feedback: 3 client bugs
+
+1. **Client can't dig terrain (dirt)** — FIXED: removed the `_pd/_projCtx` block in `_dig`. The client's sim is paused → no AI digs → every DN = a player action → we always forward. + findApi searches 2 levels deep (more reliable excavate discovery) + HOST diagnostics (log first dig / missing API).
+2. **Grabber doesn't move wet sand** — TO INVESTIGATE. Likely root cause: the client's cellIds are frozen from the moment of join (we sync the world's APPEARANCE mapData/wall/shadow/auth, but NOT the cellIds/elementData grid — sim-only). The grabber/element operations on the client read stale cellIds.
+3. **Foundation → red indestructible blocks** — TO INVESTIGATE. Same cause: the client places the structure locally (writes cellIds based on the FROZEN state from join) → divergence from the host → phantom blocks. The proper fix: make client structure placement host-authoritative (no local cellIds writes) — requires care + a real test. Player workaround: the HOST places foundations.
+
+Key architectural knowledge: **cellIds/elementData are NOT synchronized** (too large, sim-only) — we sync only mapData(RGBA+material)/wallData/shadowMap/authorization. Client collision works (mapData.alpha=material), but any LOCAL client operation that writes cellIds diverges. This is the source of bugs 2 and 3.
+
+## 2026-08-17 (v0.6.3) — fix: F9 clashed with the game's quick-load (reported by Lofar666)
+
+Bug: the panel was hidden with F9, but the game has F9 = quick-load a save → hiding the panel loaded the game. Fix:
+- Panel collapse via **clicking the header** (st-head → toggle st-body, arrow ▾/▸) — zero game keys
+- Safe shortcut Ctrl+Shift+H with `capture:true` + `preventDefault` + `stopImmediatePropagation` (doesn't reach the game)
+- README/INSTRUKCJA/i18n updated (F9 removed)
+- VER 0.6.3, boot test clean, Workshop updated
+
+## 2026-08-17 (v0.6.2) — audit of the host/invites/transfer path + hardening
+
+Full review of the connection code at the user's request. **Steam callback field names verified STRAIGHT FROM THE NATIVE BINARY** (steamworksjs.win32-x64-msvc.node, extracted strings):
+- P2PSessionRequest: field `remote` ✅ (code correct)
+- GameLobbyJoinRequested: `lobby_steam_id` → napi camelCase `lobbySteamId` ✅ (code correct)
+- SteamId: `steamId64/steamId32/accountId` ✅; methods sendP2PPacket/acceptP2PSession/getOwner/getMembers/openInviteDialog/setJoinable ✅
+- Conclusion: the callbacks were NOT the bug; the real bug = missing invite handling with the game closed (fixed in 0.6.1)
+
+0.6.2 hardening:
+- `S.lobby.setJoinable(true)` after lobby creation
+- clear the `connect` rich presence on stopNetworking (so "Join Game" doesn't go stale)
+- `start argv:` log at startup (diagnostics — shows whether Steam passed +connect_lobby to the joiner)
+- Boot test clean, PROTO_VER 4, VER 0.6.2, Workshop updated
+
+## 2026-08-17 (v0.6.1) — CRITICAL invite fix (version-independent)
+
+Many people: "nothing happens after clicking the invite", regardless of game version. Cause: the code handled ONLY `GameLobbyJoinRequested` (overlay with the game running). Steam has 3 join paths:
+1. game running + accept in the overlay → `GameLobbyJoinRequested` (was handled)
+2. game CLOSED + accept → Steam launches the game with `+connect_lobby <id>` in argv (we weren't reading it!) ← the most common case
+3. game running + accept from the friends list → Steam launches a 2nd instance → single-instance kills it → `second-instance` event with argv (we weren't handling it)
+
+Fix (st-main.js):
+- `tryJoinFromArgv(argv)` parses `+connect_lobby <id>` and `steam://joinlobby/<appid>/<lobbyid>/...` (regex); unit test with 4 cases OK
+- Called at startup (after Steam init, cold launch) + `app.on('second-instance')` (coexists with the game's handler)
+- `setRichPresence('connect', '+connect_lobby '+lobbyId)` when hosting → "Join Game" appears in the friends list + the correct launch param
+- `S._pendingJoin` in case argv arrives before Steam init
+- Boot test clean, PROTO_VER unchanged (4), VER 0.6.1
+- Workshop + SandTogether-0.6.1.zip updated
+
+## 2026-08-17 (v0.6.0) — MULTI-VERSION SUPPORT (Justin/MIXUIL: "nothing after the invite")
+
+Problem: the game ships a new version every 1-2 days (0.5.2/0.5.3/0.5.4 in circulation). Steam serves **0.5.2** by DEFAULT, while the mod targeted 0.5.3 → for most subscribers the anchors didn't match → the panel shows, but the mechanics (frame hook + actions) weren't wired in → "invites work, the panel doesn't respond". Confirmed by 2 people (Justin, MIXUIL).
+
+Solution:
+- **patches.json rebuilt with variants**: each patch has a list of {anchor,patched} for different versions (0.5.3 + 0.5.2); the installer/patcher tries them in order and applies the matching one. An agent found and verified 9 anchors for 0.5.2 (all unique).
+- **install.ps1 (pure PowerShell, no Node)** + the patch.js installer: iterate over variants; if a CRITICAL hook (frame:update) is missing → hard error "unsupported game version" (instead of silently passing). Non-critical misses → warning, coop still works.
+- **Runtime backstop in the mod**: if the game state isn't captured within 12 s (the game updated after install) → red "Unsupported game version" panel.
+- Idempotency fix: the achievements patch got a `/*STA*/` marker (its target text was a substring of the original → false "already applied").
+- Validation: 9/9 apply on 0.5.2 (v1) and 0.5.3 (v0); a 2nd pass = 0 duplicates (idempotency OK).
+- VER 0.6.0, PROTO_VER unchanged (4, same network protocol). The user's game refreshed with a clean 0.5.3 + re-patched.
+
+NOTE: MANUAL.zip (pre-patched 0.5.3) works ONLY for 0.5.3 — everyone else should use **install.bat** (it detects the version itself and patches their files). 0.5.4 still unsupported (no files) — the installer will report it clearly.
+
+## 2026-08-17 (v0.5.1) — reliable world transfer over Steam P2P
+
+Bug reported by a tester: after "Send world" the client doesn't see the host's save. Cause: `sendWorld` blasted all pieces (192 KB each) synchronously in a loop → Steam P2P buffer overflow → dropped packets → incomplete/corrupted transfer. The local test passed because it went over WebSocket/LAN (TCP stream, no packet limits).
+
+Fix:
+- Packet size reduced 192 KB → **48 KB** (safely under the Steam P2P limit)
+- Sending **spread over time**: queue `ST._wtx`, 4 packets/tick every 25 ms (~7.5 MB/s) instead of a blast
+- **Lost packet recovery**: the receiver tracks received indexes, every 700 ms sends `world-need` with the missing ones → the host resends; import only when got===total (world-end may get lost — it doesn't block)
+- Simulation at 30% loss: 29/68 lost, recovered in 5 rounds, file bit-identical ✓
+- PROTO_VER 3→4 (version mismatch detection between players)
+- Workshop + SandTogether-0.5.1.zip + MANUAL.zip updated; changeNote describes the fix
+
+## 2026-08-16 (v0.5.0b) — achievements-with-mods
+
+- New bundle patch "achievements with mods": the `integrity.modsUsed` condition removed from the achievement gate (A_ at pretty:128344); **`cheatsUsed` stays** (the devs' intent regarding the cheats menu — we don't bypass it)
+- Rationale: today modsUsed is dead (never set), the patch = insurance against future game versions; the "achievement enabler" standard known from other games
+- Patcher FIX: the per-patch idempotency test changed from "patched present" to "anchor gone" — the previous test falsely skipped patches whose target text is a substring of the original (exactly this case)
+- Workshop + SandTogether-0.5.0.zip updated
+
+## 2026-08-16 (v0.5.0) — FULL MULTIPLAYER (user request: 100%)
+
+New bundle patches (1× anchors): player-dig flag (I), projectile-update flag (m), spray flag (_) — context flags that distinguish PLAYER actions from critter/drone actions (the latter counted only by the host).
+
+- **Client firearms/rockets**: client projectiles simulated locally, hits forwarded to the host (DN in _projCtx context); host projectiles → client and client → host drawn as tracers on the ghost layer (zero double simulation/damage)
+- **Critters + drones**: {t:"ent"} stream at 10 Hz host→client (wholesale; local AI between packets = smoothing); critter DN/Gz NOT forwarded (flag gating)
+- **Item pickup**: `worldItem:pickedUp` event (bus) → the client forwards the id → the host executes **FH.world.items.pickUp** (full effects: artifacts++, orb→tech, sounds); a `_pickedPending` filter (TTL 10 s) in snapshot reconcile protects against a respawn on the client
+- **Building moves for both sides**: structures:removed(byMove) → stash old positions → pair with structures:moved → {k:"move"}/{t:"st",k:"mv"}
+- **World event sounds**: tap on the host workers' onmessage (PlaySound=41, limit 20/s) → {t:"snd"} → the client plays via FH.sound (best-effort, introspection)
+- **Story/gloom**: store.mods (storyProgression) + store.gloom in the res message (1 Hz)
+- **Vacuum**: the real capacity table [500,1000,1500,2000,2500,3000] from the game code (module 6420) × upgrade level (FH.upgrades.getLevel)
+- PROTO_VER=3; E2E 2-instance test clean; Workshop updated (description without the limitations section, an asterisk: tracers/10 Hz/rare race on simultaneous pickup)
+
+## 2026-08-16 (v0.4.2) — gap audit + fixes
+
+Fixed oversights (from the "what did I forget" audit):
+- **Version handshake** (PROTO_VER=2 in hello) — on mismatch a red "DIFFERENT MOD VERSIONS" message on both sides; the world batch has a v:2 field and the client rejects other versions
+- **Host drones visible for the client** — added to the snapshot (store.drones wholesale)
+- **Authorization grid streamed** — chunk format v2: map(4)+wall(1)+shadow(1)+auth(1)=7 B/cell; without this the client couldn't dig in zones the host unlocked after joining
+- **3-4 player support** — the host relays pos/hello between clients ({t:"relay",from,msg}); the world is broadcast anyway
+- **Workshop title without the surname** (user decision after my privacy recommendation): "SandTogether — Co-op Multiplayer"; authorship stays in the description/README/code/HUD
+- README: a warning that the client shouldn't rely on their own saves during a session
+- Workshop update pushed (item 3784750764, Public, cover = the user's artwork SandustryPic.png)
+
+Known gaps → v0.5: client firearms, client building moves, item pickup, critters, world event sounds on the client, objectives/story sync in long sessions, chat, ping, real vacuum tank capacities
+
+## 2026-08-16 (v0.4.1) — AUTHORSHIP + EN + STEAM WORKSHOP
+
+- **Author: KAMIL PADULA** — headers in all source files (sandtogether.js, st-main.js, patch.js, st-preload-append.js, install.ps1, modinfo.json), HUD credit ("by Kamil Padula"), README/INSTRUKCJA
+- **i18n**: the mod's UI is bilingual — EN by default, PL auto-detected (getPreferredSystemLanguagesSync); STRINGS table in sandtogether.js; installer and logs in English
+- **README.md (EN)** + INSTRUKCJA.md (PL) in the package; package SandTogether-0.4.1.zip
+- **Steam Workshop**: published via steamworks.js (workshop.createItem/updateItem, account Iron):
+  - Item ID: **3784750764** — https://steamcommunity.com/sharedfiles/filedetails/?id=3784750764
+  - Visibility: **Private** (for the author to review; change to Public on the item page or via script)
+  - Contents: install.ps1 + README + INSTRUKCJA + src/ ; preview.png generated (src/make-preview.js — placeholder, replace with a screenshot)
+  - Republish/update: `node src/publish-workshop.js 3784750764`
+- Workshop NOTE/risks: the mod installs via install.ps1 (it patches game files) — subscribing alone doesn't install; possible moderation/dev reaction (the game has no official loader for EA yet); contacting the devs/Sandustry Discord recommended
+
+## 2026-08-16 (late night) — v0.4.0: SHARED FACTORY (M4)
+
+### New mechanisms
+- **Structures (buildings/machines/belts/pipes)**:
+  - Event-driven: subscribe to `structures:placed/removed` via FH.events.on (bus on state.sandkit.events) on both sides; the `_applyingNet` flag suppresses feedback loops
+  - Client builds/demolishes → `{t:"act",k:"build"/"demolish"}` → the host replays via **FH.structures.build/removeAt/update** (the API handles store+cache+blockGrid for us!) → broadcast `{t:"st"}` to clients
+  - Snapshot-reconcile every 2.5 s (deflate JSON store.structures+pipes+worldItems): add/remove/data update via the API, worldItems wholesale
+- **Resources** (1 Hz): store.resources + productionPoints + SAB gold/energy/productionPoints + conveyorBeltsAnimationIndex (belt animation on the client)
+- **Client vacuum**: bundle patch `vacuum hook (j)` — anchor `j=(e,t,n,a)=>{var s,l,U;const f=y(e);x(t,f);...` (1×); the client sends intent (120 ms throttle), the host collects elements (FH.elements.getInfoAtPos + removeAtDeferred, radius 4, max 10/tick) → `{t:"vacres",types}` → the client fills the tanks (soft limit 250 — the exact capacity table is internal)
+
+### Findings from analysis
+- FH.structures has a full instance API: build (=k1=Q, emits building:place[cancellable only for string types]/building:placed), removeAt/Between/AtPositions, update (V6+propagation to workers), setData, getAtCell, beginBatchWrite
+- Weapon-tick (53442): only Dig/Shoot/Spray — vacuum is a separate tool (module ~12120-12400, mask C, tank fill M, cap=U.i[upgradeLevel] — internal table)
+- structures:placed events (1952), :removed (26742), :moved (53137-53143; client move = a limitation, reverted via reconcile)
+
+### E2E test (menu-world, 2 instances)
+- Subscriptions active on both sides, mirror 29-46 KB/s / 187-361 chunk/s, zero errors
+- Structures untested in-game (the menu has no buildings) — requires a user test
+
+### Known 0.4 limitations (queued for 0.5)
+- Client firearms/rockets have no effect on the world; a client building move reverts; worldItems pickup on the client unreliable (local dupe until the snapshot); critters/drones host-only (possible jitter on the client)
+- Building cost: NOT AN ISSUE — placing buildings in the game is free (gold goes into the tech tree; the client's tech = from the imported host save)
+
+### Package: SandTogether-0.4.zip
+
+## 2026-08-16 (night) — v0.3.0: M3 SHARED WORLD — E2E test passed
+
+### Engine analysis discoveries (agents)
+- **The renderer unconditionally reads only 3 buffers every frame: mapData (RGBA, 4B/cell; alpha=materialId also used for COLLISION on the main thread), wallData (u8 palette), shadowMap (u8)** → mirror = a stream of these 3 buffers; zero remapping of cellIds/elementData!
+- cellIds/elementData are sim-only; chunkShouldUpdate = simulation scheduling only (a perfect change detector)
+- **Player actions in this build do NOT go through worker messages** — the Dig/Blast opcodes are dead; everything goes through the Lu mutation queue (bundle:52636+) and direct Gz/setCellId writes on the main thread
+- Client pause: [54,true] ONLY to the manager worker (leave session.paused false → rendering works); while paused the Lu queue never drains (leak) → the _dropLu hook
+- Digging: DN(state,cellX,cellY,mask2D,vel,dmg) — the mask = a plain 0/1 array 11×11/13×13 (shovel upgrade); replayed on the host via FH.*.excavate
+- FH (ie.FH) captured in the frame:update v2 patch — namespaces: utils,action,elements,world,terrains,wall,shadows,...
+
+### New bundle.js patches (patch.js, anchors verified 1×)
+- frame hook v2: also passes ie.FH
+- dig hook (DN=j): window.SandTogether._dig — the client sends intent, skips local execution
+- setCell hook (Gz=B): _setCell — the client sends + executes locally (prediction)
+- mutation-queue drop (Lu=h/m): _dropLu — no leak while paused
+
+### World sync protocol
+- Host: chunkShouldUpdate scan every frame → pending; batch ≤40 chunks/100 ms, priority by distance to players, rolling sweep 4/batch (self-healing); format [u16 cx][u16 cy][u8 cw][u8 ch][mapRGBA][wall][shadow] → deflate-raw (CompressionStream) → base64 → {t:"wc",wid,scene,W,H,d}
+- Client: worldId gate (exception: both sides in the menu, scene 1 = test mode), sim pause on the first batch, write into the SAB → the renderer picks it up next frame
+- Actions: {t:"act",k:"dig"|"set"} → host replays via FH excavate/setCellId
+- Full world on peer-hello + a Resync button
+
+### E2E test result (2 instances, menu-world 720×720, 324 chunks)
+- Full world: ~2 s; steady-state: 8–27 KB/s, 74–269 chunk/s, queue 0
+- Client: "Client simulation: PAUSED (host mirror)", batch application OK, zero errors
+
+### Package
+- SandTogether-0.3.zip (for the second player)
+
+### TODO v0.4
+- Structure/building sync (store.structures + session.cache.structures d.set / zoom<1 linear scan) + blockGrid SAB
+- Resource sync (gold/energy/productionPoints SAB u32) and inventory
+- Vacuum/grabber on the client (currently a no-op)
+- Verify chunkShouldUpdate orientation on a non-square in-game world
+- In-game test (scene ≠ 1) and a real CH↔PL test over Steam P2P
+
+## 2026-08-16 (evening) — v0.2: M1+M2 PASSED, networking works end-to-end
+
+### Built (src/)
+- `st-main.js` — networking in the main process: Steam P2P (FriendsOnly lobby, overlay invite, P2PSessionRequest/GameLobbyJoinRequested/LobbyChatUpdate callbacks, 15 ms packet poll) + our own minimal WebSocket RFC6455 (server and client on `net`, zero dependencies). IPC: st:host-steam/join-steam/invite/host-ws/join-ws/stop/send/status + push st:msg/st:event.
+- `sandtogether.js` — renderer: HUD (Host Steam/Invite/Host LAN/Join LAN/Send world buttons, F9 hides), position sync at 20 Hz, ghost sprites on our own canvas (transform screen = world − camera, interpolation 0.25), world transfer (save export/import via window.electron, base64 chunks of 192 KB).
+- `st-preload-append.js` — contextBridge bridge `window.sandtogetherNet`.
+- `patch.js` — idempotent patcher (6 patches: mod files, index.html, bundle.js frame hook, preload, replaceable main.js init block, single-instance bypass for `--st-*`).
+
+### Test results (2 instances locally, --st-autotest)
+- Host: WS server up, peer-connected, hello (nick Iron), **received the client's position (1914,1856)**
+- Client: joined, **received the host's position** — full bidirectional exchange works
+- Notes: the second local instance falls back to software rendering (GPU cache conflict) — won't happen on two PCs
+- Steam P2P NOT tested yet (requires 2 accounts — test with a friend)
+
+### Package for the second player
+- `SandTogether-0.2.zip` (install.ps1 + INSTRUKCJA.md + src) — automatic installation on the friend's PC
+
+### Known technical details
+- steamworks.js 0.3.1: networking={sendP2PPacket,isP2PPacketAvailable,readP2PPacket,acceptP2PSession}, matchmaking={createLobby,joinLobby,Lobby(openInviteDialog,getMembers,getOwner)}, callback.SteamCallback (P2PSessionRequest=6, GameLobbyJoinRequested=8)
+- A Buffer arriving in the renderer via IPC comes as {type:'Buffer',data:[...]} — handled in sendWorld
+- getSaveFiles → an array of metadata from the first line of the .save; exportSave → {success,data}; importSave validates metaData.id
+
+
+## 2026-08-16 — M0 PASSED: injection works (without Fluxloader)
+
+### Decision: dropping Fluxloader
+- Fluxloader (github.com/fluxloader-team/fluxloader) was built for the **demo** — last release 2.5.5 from 2026-04-12, last commit 2026-04-21, i.e. before the EA launch (Aug 13).
+- On the Steam Workshop for EA there is **no** fluxloader item (search: 0 results), even though the game's main.js has integration for it — apparently not published for EA yet.
+- Instead: **our own injection via an extracted `resources\app`**.
+
+### What was done in the game files (F:\SteamLibrary\steamapps\common\Sandustry\resources\)
+1. `app\` — an extracted copy of app.asar (the whole game, 135 MB)
+2. `app.asar` → **renamed to `app.asar.bak`** (Electron in this build prefers the asar over the folder — without the rename the folder was ignored)
+3. `app\main.js` — a logging marker added after the `DEV_BYPASS_MSSTORE_INIT_GATE` line
+4. `app\dist\index.html` — `<script src="js/sandtogether.js"></script>` added BEFORE bundle.js
+5. `app\dist\js\sandtogether.js` — our mod (M0: hook on `new Worker(...)`, log probe)
+
+### Test result (Sandustry.exe --enable-logging)
+- Marker in the main process: PRESENT
+- `[SandTogether] Injection OK` in the renderer: PRESENT
+- The Worker hook intercepted worker creation: **1× manager + 1× utility + 17× simulation** (user's CPU → clamp(HC-2,2,18))
+- The game starts and runs normally with our code
+
+### How to revert (back to a clean game)
+1. Delete the `resources\app` folder
+2. Rename `resources\app.asar.bak` back to `app.asar`
+(or simply Steam → verify integrity of game files)
+
+### Operational NOTE
+- A Steam game update installs a new app.asar → our extracted folder becomes an OLD version of the game. After every update: re-extract the asar and reapply our 3 changes (eventually a `deploy.ps1` script).
+- Steam integrity verification restores app.asar (our app folder remains, but will it then be ignored again? — no: the asar comes back, and Electron prefers the asar ⇒ the mod stops loading; the rename must be redone).
+
+### Next steps
+- M1: networking layer — WebSocket server in the main process (we have full access to main.js!), client, handshake
+- M2: player ghosts (position sync via a hook on the SAB playerPos / player:moved)
