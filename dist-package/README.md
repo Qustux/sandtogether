@@ -1,15 +1,4 @@
-# SandTogether — co-op multiplayer mod for Sandustry (v0.9.165-beta, unofficial fork)
-
-> ### ⚠ Unofficial fork — updated for Sandustry 0.5.6
->
-> This build is an **unofficial fork** of SandTogether by Kamil Padula, updated for game
-> version **0.5.6**. All credit for the mod belongs to the original author. Same MIT licence.
->
-> **Both players must run this same build.** Pairing it with the Workshop version shows a
-> MOD VERSION MISMATCH warning — that is intentional, the two builds speak slightly
-> different protocols.
->
-> Fork: https://github.com/Qustux/sandtogether · Original: https://github.com/IronBamBam1990/sandtogether
+# SandTogether — co-op multiplayer mod for Sandustry (v0.9.39-beta)
 
 **Author: Kamil Padula** · Contributors: **dotNine**, **Knight-HD**, **DwoaC**, **Cr0ss0vr**, **TCentraL**
 
@@ -58,15 +47,9 @@ Polska instrukcja: zobacz `INSTRUKCJA.md`.
 > fully cross-platform and macOS works the same way, so it is expected to run.
 > Please report success or failure (with `~/.config/Sandustry/logs/main.log`).
 
-**That's it.** The mod auto-updates itself at every game launch from your Workshop
-subscription — but only when the Workshop copy is **newer** than the installed one.
-This fork is `0.9.165-beta` and the Workshop item is currently `0.9.164-beta`, so your
-install stays put. When the original author publishes a build newer than this fork, it
-will replace the fork automatically, which is the correct behaviour: use the official
-version once it supports your game build.
-
-If you are not subscribed to the Workshop item at all, nothing auto-updates and the
-mod simply stays as installed.
+**That's it — forever.** Since v0.9.39 the mod **auto-updates itself** at every game
+launch from your Workshop subscription (the game restarts once when it does).
+You never run the installer again, and both players always match versions.
 
 ## How to play (over the internet, via Steam — no network setup)
 
@@ -101,36 +84,13 @@ mod simply stays as installed.
 - Auto-reconnect on both transports; clear warnings for host-pause, version
   mismatch and different game builds
 
-## What this fork adds on top
-
-- **Works on Sandustry 0.5.6.** The 0.5.6 update silently broke most tool syncing —
-  building, demolishing, the vacuum, grabber, flamethrower, volcanizer, caulk blaster,
-  tech tree and creatures stopped syncing between players while co-op still connected.
-- **Joining no longer hangs.** The world transfer could restart in a loop and leave the
-  joining player on a stale copy of the world.
-- **The world is smooth for the joining player.** The host used to mistake a healthy
-  connection for congestion and throttle itself, which looked like stuttering sand and
-  conveyors.
-- **Ctrl+Z is personal.** Undo used to hit the *other* player's last action.
-- **You can see what other players are doing:** the real building preview at the exact
-  spot it will be placed, with the correct build mode and a direction arrow for
-  conveyors; the shovel's dig area; the grabber's area and what it is carrying.
-- **Names above held items** — "Gold ×14", "Sediment", "Collector" — for other players
-  and for yourself, in your game's language.
-
-**Known issue:** undoing a *very large* demolished area can leave red blocks on the
-other player's screen for about ten seconds before they resolve. Small and medium areas
-recover in about a second. It is known and will be fixed in a later update.
-
 ## Important note for the joining player
 
 Don't rely on saving the game while connected as a client — your save captures
 the world from the moment you joined. The host's save is the authoritative one.
 
-After a **Steam game update** the mod may be reverted. Re-run the installer from this
-folder to put the fork back (macOS: or launch via `SandTogether-Launch.command`).
-Note that a game update may also break the mod's anchors again — if tools stop syncing
-between players after an update, that is what happened.
+After a **Steam game update** the mod may be reverted — just launch the game:
+the auto-updater re-installs it (macOS: or launch via `SandTogether-Launch.command`).
 
 ## Uninstall
 
@@ -140,4 +100,3 @@ then delete the `resources\app` folder
 
 ---
 SandTogether by **Kamil Padula** · source: https://github.com/IronBamBam1990/sandtogether (MIT)
-Unofficial 0.5.6 fork: https://github.com/Qustux/sandtogether (MIT)
